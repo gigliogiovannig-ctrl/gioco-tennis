@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="theme-color" content="#12202f">
+<title>Racchetta — Tennis TV</title>
+<link rel="stylesheet" href="css/controller.css">
+</head>
+<body>
+<main id="join">
+  <h1>🎾 Racchetta</h1>
+  <p class="sub">Collega il telefono alla TV</p>
+  <label>Codice stanza<input id="room" maxlength="4" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="ABCD"></label>
+  <label>Il tuo nome<input id="name" maxlength="12" autocomplete="off" placeholder="Giocatore"></label>
+  <div class="field">Mano
+    <div class="seg" id="handSel"><button data-h="R">Destro</button><button data-h="L">Mancino</button></div>
+  </div>
+  <button id="connectBtn" class="big">Connetti</button>
+  <p id="joinMsg" class="msg"></p>
+</main>
+
+<main id="play" hidden>
+  <div id="badge"><span id="badgeDot"></span><span id="badgeText">Giocatore</span></div>
+  <div id="score"></div>
+  <div id="status">Connesso!</div>
+
+  <div id="swingBox">
+    <div id="swingLabel">Fai uno swing!</div>
+    <div id="meter"><div id="meterFill"></div></div>
+  </div>
+
+  <button id="calibBtn" class="big">🎯 Calibra<small>punta il telefono verso la TV e premi</small></button>
+
+  <section id="host" hidden>
+    <h2>Opzioni partita</h2>
+    <div class="seg" id="hostGames"><button data-v="1">1 gioco</button><button data-v="3">Meglio di 3</button><button data-v="5">Meglio di 5</button></div>
+    <div class="seg" id="hostDiff"><button data-v="0">CPU facile</button><button data-v="1">Normale</button><button data-v="2">Difficile</button></div>
+    <button id="startBtn" class="big go">▶ Inizia partita</button>
+  </section>
+
+  <details>
+    <summary>Impostazioni</summary>
+    <div class="field">Mano
+      <div class="seg" id="handSel2"><button data-h="R">Destro</button><button data-h="L">Mancino</button></div>
+    </div>
+    <label>Sensibilità swing <input type="range" id="sens" min="0" max="100" value="50"></label>
+    <p class="tip">Impugna il telefono come il manico della racchetta: la parte alta del telefono è la testa della racchetta, lo schermo è la faccia della racchetta.</p>
+  </details>
+  <p id="warn" class="msg"></p>
+</main>
+
+<script src="vendor/peerjs.min.js"></script>
+<script type="module" src="js/controller.js"></script>
+</body>
+</html>

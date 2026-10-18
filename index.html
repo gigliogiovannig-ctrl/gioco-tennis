@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tennis TV</title>
+<link rel="stylesheet" href="css/tv.css">
+</head>
+<body>
+<div id="stage"></div>
+
+<!-- HUD di gioco -->
+<div id="hud" hidden>
+  <div id="scoreboard">
+    <div class="row" id="sb0"><span class="dot"></span><span class="name"></span><span class="serve">●</span><span class="games"></span><span class="pts"></span></div>
+    <div class="row" id="sb1"><span class="dot"></span><span class="name"></span><span class="serve">●</span><span class="games"></span><span class="pts"></span></div>
+  </div>
+  <div id="hint"></div>
+</div>
+<div id="message"><div id="msgBig"></div><div id="msgSmall"></div></div>
+<div id="toast"></div>
+
+<!-- Lobby -->
+<div id="lobby">
+  <div class="panel">
+    <h1>🎾 Tennis TV</h1>
+    <p class="sub">Usa il telefono come racchetta!</p>
+    <div class="cols">
+      <div class="join">
+        <div id="qr"><div class="loading">Connessione al server…</div></div>
+        <p>Inquadra il QR col telefono<br>oppure apri <b id="ctrlUrl">…</b></p>
+        <p>Codice stanza: <span id="roomCode">----</span></p>
+      </div>
+      <div class="setup">
+        <div class="slot" id="slot0"><span class="dot p0"></span><div><b>Giocatore 1</b><div class="st">In attesa di un telefono… (tastiera: SPAZIO)</div></div></div>
+        <div class="slot" id="slot1"><span class="dot p1"></span><div><b>Giocatore 2</b><div class="st">CPU (collega un 2° telefono per giocare in due)</div></div></div>
+        <div class="opt"><span>Partita</span>
+          <div class="seg" id="optGames"><button data-v="1">1 gioco</button><button data-v="3">Al meglio di 3</button><button data-v="5">Al meglio di 5</button></div>
+        </div>
+        <div class="opt"><span>CPU</span>
+          <div class="seg" id="optDiff"><button data-v="0">Facile</button><button data-v="1">Normale</button><button data-v="2">Difficile</button></div>
+        </div>
+        <button id="startBtn" class="big">▶ Inizia partita</button>
+        <p class="small">Premi <b>Invio</b> o il tasto “Inizia” sul telefono del Giocatore 1.</p>
+      </div>
+    </div>
+    <details class="howto">
+      <summary>Come si gioca</summary>
+      <ol>
+        <li>Impugna il telefono come il manico di una racchetta: la parte alta del telefono è la testa della racchetta.</li>
+        <li>Punta il telefono verso la TV e premi <b>Calibra</b>: ora la racchetta sullo schermo segue il telefono.</li>
+        <li>Il giocatore corre da solo verso la palla (come su Wii): tu devi solo fare lo swing al momento giusto.</li>
+        <li>Swing in anticipo = palla incrociata, in ritardo = palla lungo linea. Più forte è lo swing, più veloce il colpo.</li>
+        <li>Swing dal basso verso l'alto = top spin, dall'alto verso il basso = slice. Swing lentissimo = pallonetto.</li>
+        <li>Al servizio: uno swing per lanciare la palla, un secondo swing quando è in alto per servire.</li>
+      </ol>
+    </details>
+  </div>
+</div>
+
+<div id="audioHint">🔊 Clicca o premi un tasto per attivare l'audio</div>
+
+<script src="vendor/peerjs.min.js"></script>
+<script src="vendor/qrcode.js"></script>
+<script type="module" src="js/game.js"></script>
+</body>
+</html>
