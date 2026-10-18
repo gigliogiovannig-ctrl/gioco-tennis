@@ -19,6 +19,9 @@ button.big { font: inherit; font-size: 22px; font-weight: 900; padding: 16px; bo
 button.big:active { transform: translateY(3px); box-shadow: 0 2px 0 #9bb01c; }
 button.big small { font-size: 13px; font-weight: normal; }
 button.big.go { background: #2e9e4f; color: #fff; box-shadow: 0 5px 0 #1d6e35; }
+button.big.alt { background: #34506e; color: #fff; box-shadow: 0 5px 0 #1d3047; font-size: 19px; }
+#matchCtl, #lobbyCtl, #pausedCtl { display: flex; flex-direction: column; gap: 10px; }
+#teamName { text-align: center; font-weight: bold; color: var(--pc); }
 button:disabled { opacity: .5; }
 .msg { color: #ffb4a8; text-align: center; min-height: 1.2em; margin: 0; }
 .msg.ok { color: var(--muted); }

@@ -5,7 +5,9 @@ La racchetta sullo schermo segue i movimenti del telefono e gli swing si rilevan
 
 - **TV**: apri `index.html` nel browser della TV (o di un PC/portatile collegato alla TV con HDMI).
 - **Telefoni**: inquadra il QR code mostrato sulla TV. Si apre la pagina “Racchetta” (`controller.html`).
-- **1 telefono** = tu contro la CPU. **2 telefoni** = sfida a due.
+- **Singolo**: 1 telefono = tu contro la CPU, 2 telefoni = sfida a due.
+- **Doppio 2 contro 2**: fino a 4 telefoni (squadra rossa contro squadra blu). I posti liberi li occupa la CPU, quindi si può fare anche 2 amici contro 2 CPU. Dal telefono si può cambiare squadra.
+- **Pausa** in qualsiasi momento: tasto ⏸ sul telefono, oppure P / Esc sulla tastiera. Se un telefono si scollega la partita va in pausa da sola.
 - Non serve installare niente: è tutto nel browser. I telefoni comunicano con la TV via WebRTC (PeerJS).
 
 ## Come pubblicarlo (una volta sola)
@@ -51,8 +53,10 @@ Senza telefono puoi provare il gioco dalla tastiera: **Invio** per iniziare, **S
 
 | File | Cosa fa |
 | --- | --- |
-| `index.html`, `css/tv.css` | Pagina della TV: lobby, tabellone, messaggi |
-| `js/game.js` | Grafica 3D (three.js), fisica della palla (gravità, aria, effetti), regole e punteggio, CPU, connessione con i telefoni |
+| `index.html`, `css/tv.css` | Pagina della TV: lobby, tabellone, messaggi, pausa |
+| `js/game.js` | Fisica della palla (gravità, aria, effetti), regole e punteggio di singolo e doppio, CPU, pausa, connessione con i telefoni |
+| `js/scene.js` | Grafica 3D (three.js): campo, stadio, pubblico animato, luci e ombre |
+| `js/athlete.js` | Modello dei tennisti, con braccia e gambe articolate |
 | `js/audio.js` | Suoni sintetizzati: colpi, rimbalzi, pubblico |
 | `controller.html`, `css/controller.css`, `js/controller.js` | Pagina del telefono: sensori, rilevamento swing, calibrazione, opzioni |
 | `js/config.js` | Impostazioni condivise (ID PeerJS, colori dei giocatori) |

@@ -32,8 +32,23 @@
 
   <button id="calibBtn" class="big">🎯 Calibra<small>punta il telefono verso la TV e premi</small></button>
 
+  <section id="matchCtl" hidden>
+    <button id="pauseBtn" class="big alt">⏸ Pausa</button>
+    <div id="pausedCtl" hidden>
+      <button id="resumeBtn" class="big go">▶ Riprendi</button>
+      <button id="restartBtn" class="big alt">↺ Ricomincia</button>
+      <button id="quitBtn" class="big alt">🏠 Torna alla lobby</button>
+    </div>
+  </section>
+
+  <section id="lobbyCtl" hidden>
+    <div id="teamName"></div>
+    <button id="teamBtn" class="big alt">⇄ Cambia squadra</button>
+  </section>
+
   <section id="host" hidden>
     <h2>Opzioni partita</h2>
+    <div class="seg" id="hostMode"><button data-v="0">Singolo</button><button data-v="1">Doppio 2 vs 2</button></div>
     <div class="seg" id="hostGames"><button data-v="1">1 gioco</button><button data-v="3">Meglio di 3</button><button data-v="5">Meglio di 5</button></div>
     <div class="seg" id="hostDiff"><button data-v="0">CPU facile</button><button data-v="1">Normale</button><button data-v="2">Difficile</button></div>
     <button id="startBtn" class="big go">▶ Inizia partita</button>

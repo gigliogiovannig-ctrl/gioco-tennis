@@ -33,8 +33,17 @@
         <p>Codice stanza: <span id="roomCode">----</span></p>
       </div>
       <div class="setup">
-        <div class="slot" id="slot0"><span class="dot p0"></span><div><b>Giocatore 1</b><div class="st">In attesa di un telefono… (tastiera: SPAZIO)</div></div></div>
-        <div class="slot" id="slot1"><span class="dot p1"></span><div><b>Giocatore 2</b><div class="st">CPU (collega un 2° telefono per giocare in due)</div></div></div>
+        <div class="slots">
+          <div class="team red">Squadra rossa</div>
+          <div class="team blue">Squadra blu</div>
+          <div class="slot" id="slot0"><span class="dot p0"></span><div><b>Giocatore 1</b><div class="st"></div></div></div>
+          <div class="slot" id="slot1"><span class="dot p1"></span><div><b>Giocatore 2</b><div class="st"></div></div></div>
+          <div class="slot" id="slot2"><span class="dot p2"></span><div><b>Giocatore 3</b><div class="st"></div></div></div>
+          <div class="slot" id="slot3"><span class="dot p3"></span><div><b>Giocatore 4</b><div class="st"></div></div></div>
+        </div>
+        <div class="opt"><span>Modalità</span>
+          <div class="seg" id="optMode"><button data-v="0">Singolo 1 vs 1</button><button data-v="1">Doppio 2 vs 2</button></div>
+        </div>
         <div class="opt"><span>Partita</span>
           <div class="seg" id="optGames"><button data-v="1">1 gioco</button><button data-v="3">Al meglio di 3</button><button data-v="5">Al meglio di 5</button></div>
         </div>
@@ -55,9 +64,25 @@
         <li>Swing forte = colpo potente. Dal basso verso l'alto = top spin, dall'alto verso il basso = slice.</li>
         <li>Swing piano dal basso verso l'alto = pallonetto; piano dall'alto verso il basso = palla corta. Palla alta + swing = smash.</li>
         <li>Al servizio: uno swing per lanciare la palla, un secondo swing quando è in alto per servire.</li>
+        <li>Doppio: fino a 4 telefoni. Dal telefono puoi cambiare squadra; i posti liberi li prende la CPU.</li>
+        <li>Pausa: tasto ⏸ sul telefono, oppure P / Esc sulla tastiera.</li>
         <li>Da tastiera: Spazio (Shift = forte), ↑ pallonetto, ↓ slice, ← → per mirare.</li>
       </ol>
     </details>
+  </div>
+</div>
+
+<!-- Pausa -->
+<div id="pause" hidden>
+  <div class="panel small-panel">
+    <h1>⏸ Pausa</h1>
+    <p id="pauseWhy" class="sub"></p>
+    <div class="pause-btns">
+      <button id="resumeBtn" class="big">▶ Riprendi</button>
+      <button id="restartBtn" class="big alt">↺ Ricomincia la partita</button>
+      <button id="quitBtn" class="big alt">🏠 Torna alla lobby</button>
+    </div>
+    <p class="small">Tastiera: Invio o P per riprendere</p>
   </div>
 </div>
 

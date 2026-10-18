@@ -223,12 +223,13 @@ function onData(d) {
     case 'welcome':
       document.documentElement.style.setProperty('--pc', d.color);
       $('badgeText').textContent = `Giocatore ${d.slot + 1} · ${d.colorName}`;
+      $('teamName').textContent = d.team;
       $('join').hidden = true;
       $('play').hidden = false;
       setTimeout(checkSensors, 2500);
       break;
     case 'full':
-      backToJoin('La partita è piena (massimo 2 telefoni).');
+      backToJoin('La partita è piena (massimo 4 telefoni).');
       break;
     case 'status':
       $('status').textContent = d.text;
@@ -236,9 +237,15 @@ function onData(d) {
       break;
     case 'lobby':
       $('host').hidden = !(d.inLobby && d.host);
-      for (const [id, key] of [['hostGames', 'games'], ['hostDiff', 'diff']]) {
-        for (const b of $(id).querySelectorAll('button')) b.classList.toggle('on', +b.dataset.v === d.opts[key]);
+      $('lobbyCtl').hidden = !d.inLobby;
+      $('matchCtl').hidden = d.inLobby;
+      showPaused(d.paused);
+      for (const [id, key] of [['hostGames', 'games'], ['hostDiff', 'diff'], ['hostMode', 'doubles']]) {
+        for (const b of $(id).querySelectorAll('button')) b.classList.toggle('on', +b.dataset.v === +d.opts[key]);
       }
+      break;
+    case 'paused':
+      showPaused(d.v);
       break;
     case 'hit':
       pok(d.s || 0.5);
@@ -263,4 +270,15 @@ $('calibBtn').addEventListener('click', () => {
 });
 $('hostGames').addEventListener('click', e => { if (e.target.dataset.v) send({ t: 'opt', k: 'games', v: +e.target.dataset.v }); });
 $('hostDiff').addEventListener('click', e => { if (e.target.dataset.v) send({ t: 'opt', k: 'diff', v: +e.target.dataset.v }); });
+$('hostMode').addEventListener('click', e => { if (e.target.dataset.v) send({ t: 'opt', k: 'doubles', v: +e.target.dataset.v }); });
 $('startBtn').addEventListener('click', () => send({ t: 'start' }));
+$('teamBtn').addEventListener('click', () => send({ t: 'team' }));
+$('pauseBtn').addEventListener('click', () => send({ t: 'pause' }));
+$('resumeBtn').addEventListener('click', () => send({ t: 'resume' }));
+$('restartBtn').addEventListener('click', () => send({ t: 'restart' }));
+$('quitBtn').addEventListener('click', () => send({ t: 'quit' }));
+
+function showPaused(v) {
+  $('pauseBtn').hidden = !!v;
+  $('pausedCtl').hidden = !v;
+}

@@ -34,9 +34,9 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #8fd3ff; fon
 
 /* Lobby */
 #lobby { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: linear-gradient(180deg, rgba(143,211,255,.35), rgba(30,90,60,.55)); overflow: auto; padding: 2vh; }
-#lobby .panel { background: var(--panel); border-radius: 24px; padding: 3vh 3vw; max-width: 1100px; width: 100%; box-shadow: 0 10px 40px rgba(0,0,0,.3); }
-#lobby h1 { margin: 0; font-size: 6vh; text-align: center; }
-#lobby .sub { margin: .3em 0 1.5em; text-align: center; font-size: 2.4vh; color: #44566a; }
+.panel { background: var(--panel); border-radius: 24px; padding: 3vh 3vw; max-width: 1100px; width: 100%; box-shadow: 0 10px 40px rgba(0,0,0,.3); }
+.panel h1 { margin: 0; font-size: 6vh; text-align: center; }
+.panel .sub { margin: .3em 0 1.5em; text-align: center; font-size: 2.4vh; color: #44566a; }
 #lobby .cols { display: flex; gap: 3vw; flex-wrap: wrap; justify-content: center; }
 #lobby .join { text-align: center; font-size: 2.1vh; flex: 0 0 auto; }
 #qr { width: 30vh; height: 30vh; min-width: 200px; min-height: 200px; margin: 0 auto; background: #fff; border-radius: 12px; display: flex; align-items: center; justify-content: center; border: 2px solid #dde5ee; }
@@ -48,8 +48,16 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #8fd3ff; fon
 .slot { display: flex; align-items: center; gap: .8em; background: #eef3f8; border-radius: 12px; padding: .7em 1em; }
 .slot .st { color: #56687c; font-size: .9em; }
 .slot.on { background: #e3f6e5; }
-.dot.p0, .dot.p1 { width: 1.2em; height: 1.2em; border-radius: 50%; flex: none; }
-.dot.p0 { background: var(--p0); } .dot.p1 { background: var(--p1); }
+.slots { display: grid; grid-template-columns: 1fr 1fr; gap: 1vh 1vw; }
+.slots .team { font-weight: bold; font-size: .9em; padding: 0 .3em; }
+.slots .team.red { color: var(--p0); } .slots .team.blue { color: var(--p1); }
+.slot.off { opacity: .45; }
+.dot.p0, .dot.p1, .dot.p2, .dot.p3 { width: 1.2em; height: 1.2em; border-radius: 50%; flex: none; }
+.dot.p0 { background: var(--p0); } .dot.p1 { background: var(--p1); } .dot.p2 { background: #fb8c00; } .dot.p3 { background: #00acc1; }
+#pause { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(8, 18, 30, .55); backdrop-filter: blur(3px); }
+.small-panel { max-width: 640px !important; text-align: center; }
+.pause-btns { display: flex; flex-direction: column; gap: 1.6vh; margin: 2vh 0; }
+button.big.alt { background: #34506e; box-shadow: 0 5px 0 #1d3047; }
 .opt { display: flex; align-items: center; gap: 1em; flex-wrap: wrap; }
 .opt > span { width: 4.5em; font-weight: bold; }
 .seg { display: flex; border-radius: 10px; overflow: hidden; border: 2px solid #c7d3df; }
