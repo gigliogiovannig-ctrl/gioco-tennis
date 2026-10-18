@@ -3,6 +3,7 @@
 // e gli swing rilevati da giroscopio/accelerometro.
 import * as THREE from '../vendor/three.module.min.js';
 import { PEER_PREFIX, PEER_OPTIONS, PLAYER_COLORS, PLAYER_COLOR_NAMES } from './config.js';
+import * as sound from './audio.js';
 
 // ---------------------------------------------------------------------------
 // Costanti (metri, secondi). Asse x = larghezza campo, z = lunghezza, y = alto.
@@ -14,15 +15,17 @@ const SERVICE_Z = 6.40;        // distanza della linea del servizio dalla rete
 const NET_H = 0.95;            // altezza rete
 const NET_HALF = HALF_W + 0.914;
 const G = 9.81;
-const SPIN_G = 5;              // accelerazione extra verso il basso per il top spin
+const SPIN_G = 5;              // effetto Magnus: il top spin fa scendere prima la palla, lo slice la fa galleggiare
+const DRAG = 0.013;            // resistenza dell'aria (a = -DRAG·|v|·v)
 const BALL_R = 0.033;
 const STEP = 1 / 120;          // passo della fisica
-const REACH = 1.8;             // distanza laterale massima palla-giocatore per colpire
-const HUMAN_SPEED = 7.2;
+// Zona di colpo attorno al giocatore: davanti, dietro, di lato e in altezza
+const HIT_FRONT = 1.4, HIT_BACK = 0.6, REACH = 1.8, HIT_MAX_Y = 3.1;
+const HUMAN_SPEED = 7.0, HUMAN_ACCEL = 26;
 const DIFF = [
-  { name: 'Facile', speed: 5.0, hitProb: 0.8, err: 1.35, maxPow: 0.5, readsOut: 0.3 },
-  { name: 'Normale', speed: 6.2, hitProb: 0.92, err: 1.0, maxPow: 0.75, readsOut: 0.7 },
-  { name: 'Difficile', speed: 7.4, hitProb: 0.985, err: 0.7, maxPow: 0.95, readsOut: 0.95 },
+  { name: 'Facile', speed: 5.0, accel: 16, hitProb: 0.78, err: 1.35, maxPow: 0.5, readsOut: 0.3 },
+  { name: 'Normale', speed: 6.2, accel: 20, hitProb: 0.9, err: 1.1, maxPow: 0.75, readsOut: 0.7 },
+  { name: 'Difficile', speed: 7.4, accel: 26, hitProb: 0.97, err: 0.7, maxPow: 0.95, readsOut: 0.95 },
 ];
 const PTS = ['0', '15', '30', '40'];
 const PTS_SPOKEN = ['zero', 'quindici', 'trenta', 'quaranta'];
@@ -35,57 +38,16 @@ const now = () => performance.now() / 1000;
 const $ = id => document.getElementById(id);
 
 // ---------------------------------------------------------------------------
-// Audio (sintetizzato, nessun file esterno) e voce dell'arbitro
+// Audio e voce dell'arbitro
 // ---------------------------------------------------------------------------
-let actx = null, noiseBuf = null;
 function unlockAudio() {
-  try {
-    if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)();
-    if (actx.state === 'suspended') actx.resume();
-  } catch (e) { /* audio non disponibile */ }
+  sound.unlockAudio();
+  sound.setEnabled(game.mode === 'match');
   $('audioHint').hidden = true;
 }
 addEventListener('pointerdown', unlockAudio);
 addEventListener('keydown', unlockAudio);
 
-function noise() {
-  if (!noiseBuf) {
-    noiseBuf = actx.createBuffer(1, actx.sampleRate * 0.6, actx.sampleRate);
-    const d = noiseBuf.getChannelData(0);
-    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
-  }
-  return noiseBuf;
-}
-function tone(t, type, f0, f1, dur, vol) {
-  const o = actx.createOscillator(), g = actx.createGain();
-  o.type = type;
-  o.frequency.setValueAtTime(f0, t);
-  o.frequency.exponentialRampToValueAtTime(f1, t + dur);
-  g.gain.setValueAtTime(Math.max(vol, 0.002), t);
-  g.gain.exponentialRampToValueAtTime(0.001, t + dur);
-  o.connect(g).connect(actx.destination);
-  o.start(t); o.stop(t + dur + 0.02);
-}
-function burst(t, dur, freq, vol) {
-  const s = actx.createBufferSource(), f = actx.createBiquadFilter(), g = actx.createGain();
-  s.buffer = noise();
-  f.type = 'bandpass'; f.frequency.value = freq; f.Q.value = 0.9;
-  g.gain.setValueAtTime(Math.max(vol, 0.002), t);
-  g.gain.exponentialRampToValueAtTime(0.001, t + dur);
-  s.connect(f).connect(g).connect(actx.destination);
-  s.start(t, Math.random() * 0.3); s.stop(t + dur + 0.02);
-}
-function sfx(type, k = 1) {
-  if (!actx || actx.state !== 'running' || game.mode !== 'match') return;
-  const t = actx.currentTime;
-  if (type === 'hit') { tone(t, 'triangle', 600, 150, 0.09, 0.25 + 0.35 * k); burst(t, 0.04, 2600, 0.35); }
-  else if (type === 'bounce') tone(t, 'sine', 210, 80, 0.07, 0.35 * k);
-  else if (type === 'net') burst(t, 0.15, 500, 0.5);
-  else if (type === 'toss') tone(t, 'sine', 320, 460, 0.06, 0.12);
-  else if (type === 'applause') {
-    for (let i = 0; i < 90; i++) burst(t + Math.random() * 1.8 * Math.sqrt(Math.random()), 0.025, 1500 + Math.random() * 1500, 0.08 + Math.random() * 0.12 * k);
-  }
-}
 function say(text) {
   if (game.mode !== 'match' || !('speechSynthesis' in window)) return;
   try {
@@ -102,32 +64,10 @@ function say(text) {
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
 renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 $('stage').appendChild(renderer.domElement);
 
-const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x8fd3ff);
-scene.fog = new THREE.Fog(0x8fd3ff, 60, 140);
-const camera = new THREE.PerspectiveCamera(48, innerWidth / innerHeight, 0.5, 300);
-camera.position.set(0, 5.2, HALF_L + 8.5);
-addEventListener('resize', () => {
-  renderer.setSize(innerWidth, innerHeight);
-  camera.aspect = innerWidth / innerHeight;
-  camera.updateProjectionMatrix();
-});
-
-scene.add(new THREE.HemisphereLight(0xffffff, 0x51804a, 1.7));
-const sun = new THREE.DirectionalLight(0xffffff, 1.9);
-sun.position.set(-10, 25, 12);
-scene.add(sun);
-
-const lambert = color => new THREE.MeshLambertMaterial({ color });
-function flat(w, d, mat, x, y, z) {
-  const m = new THREE.Mesh(new THREE.PlaneGeometry(w, d), mat);
-  m.rotation.x = -Math.PI / 2;
-  m.position.set(x, y, z);
-  scene.add(m);
-  return m;
-}
 function canvasTex(w, h, draw) {
   const c = document.createElement('canvas');
   c.width = w; c.height = h;
@@ -136,12 +76,60 @@ function canvasTex(w, h, draw) {
   t.colorSpace = THREE.SRGBColorSpace;
   return t;
 }
+// Superficie con una leggera grana (cemento, erba)
+function grainTex(color, rx, ry, amount = 0.06) {
+  const t = canvasTex(256, 256, (g, w, h) => {
+    g.fillStyle = color; g.fillRect(0, 0, w, h);
+    for (let i = 0; i < 12000; i++) {
+      g.fillStyle = Math.random() < 0.5 ? `rgba(255,255,255,${amount})` : `rgba(0,0,0,${amount * 1.2})`;
+      g.fillRect(Math.random() * w, Math.random() * h, 1.6, 1.6);
+    }
+  });
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.repeat.set(rx, ry);
+  return t;
+}
+
+const scene = new THREE.Scene();
+scene.background = canvasTex(2, 256, (g, w, h) => {
+  const grd = g.createLinearGradient(0, 0, 0, h);
+  grd.addColorStop(0, '#3f9be0'); grd.addColorStop(0.6, '#8fd0fb'); grd.addColorStop(1, '#d6efff');
+  g.fillStyle = grd; g.fillRect(0, 0, w, h);
+});
+scene.fog = new THREE.Fog(0xcbe9fb, 70, 150);
+const camera = new THREE.PerspectiveCamera(48, innerWidth / innerHeight, 0.5, 300);
+camera.position.set(0, 5.2, HALF_L + 8.5);
+addEventListener('resize', () => {
+  renderer.setSize(innerWidth, innerHeight);
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+});
+
+scene.add(new THREE.HemisphereLight(0xffffff, 0x51804a, 1.5));
+const sun = new THREE.DirectionalLight(0xfff4e0, 2.2);
+sun.position.set(-10, 25, 12);
+sun.castShadow = true;
+sun.shadow.mapSize.set(1024, 1024);
+Object.assign(sun.shadow.camera, { left: -16, right: 16, top: 24, bottom: -24, near: 1, far: 80 });
+sun.shadow.bias = -0.0008;
+scene.add(sun);
+
+const lambert = (color, map = null) => new THREE.MeshLambertMaterial({ color, map });
+function flat(w, d, mat, x, y, z) {
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(w, d), mat);
+  m.rotation.x = -Math.PI / 2;
+  m.position.set(x, y, z);
+  m.receiveShadow = true;
+  scene.add(m);
+  return m;
+}
+const shadowed = obj => { obj.traverse(o => { if (o.isMesh) { o.castShadow = true; } }); return obj; };
 
 function buildCourt() {
-  flat(220, 220, lambert(0x5aa548), 0, 0, 0);
-  flat(2 * HALF_W + 9, 2 * HALF_L + 13, lambert(0x3d8a5a), 0, 0.004, 0);
-  flat(2 * HALF_W, 2 * HALF_L, lambert(0x2f6fb3), 0, 0.008, 0);
-  const white = new THREE.MeshBasicMaterial({ color: 0xffffff });
+  flat(220, 220, lambert(0xffffff, grainTex('#5aa548', 60, 60, 0.08)), 0, 0, 0);
+  flat(2 * HALF_W + 9, 2 * HALF_L + 13, lambert(0xffffff, grainTex('#3d8a5a', 6, 12)), 0, 0.004, 0);
+  flat(2 * HALF_W, 2 * HALF_L, lambert(0xffffff, grainTex('#2f6fb3', 4, 10)), 0, 0.008, 0);
+  const white = new THREE.MeshLambertMaterial({ color: 0xffffff, emissive: 0x333333 });
   const LW = 0.06;
   for (const s of [-1, 1]) {
     flat(2 * HALF_W + LW, LW * 1.6, white, 0, 0.012, s * HALF_L);   // linee di fondo
@@ -164,11 +152,11 @@ function buildCourt() {
     new THREE.MeshBasicMaterial({ map: netTex, transparent: true, side: THREE.DoubleSide, depthWrite: false }));
   net.position.set(0, NET_H / 2, 0);
   scene.add(net);
-  const tape = new THREE.Mesh(new THREE.BoxGeometry(2 * NET_HALF, 0.07, 0.03), lambert(0xffffff));
+  const tape = shadowed(new THREE.Mesh(new THREE.BoxGeometry(2 * NET_HALF, 0.07, 0.03), lambert(0xffffff)));
   tape.position.set(0, NET_H, 0);
   scene.add(tape);
   for (const s of [-1, 1]) {
-    const post = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 1.07, 10), lambert(0x30343a));
+    const post = shadowed(new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 1.07, 10), lambert(0x30343a)));
     post.position.set(s * NET_HALF, 0.535, 0);
     scene.add(post);
   }
@@ -214,24 +202,40 @@ function buildCourt() {
   wall(2 * HALF_W + 9, 0, -(HALF_L + 6.5), 0);
   wall(2 * HALF_L + 13, -(HALF_W + 4.5), 0, Math.PI / 2);
   wall(2 * HALF_L + 13, HALF_W + 4.5, 0, -Math.PI / 2);
+
+  // Sedia dell'arbitro, a bordo campo all'altezza della rete
+  const chair = new THREE.Group();
+  const wood = lambert(0x2d4a63);
+  const add = (geo, mat, x, y, z) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); chair.add(m); return m; };
+  for (const sx of [-0.35, 0.35]) for (const sz of [-0.35, 0.35]) add(new THREE.BoxGeometry(0.07, 1.9, 0.07), wood, sx, 0.95, sz);
+  add(new THREE.BoxGeometry(0.9, 0.08, 0.9), wood, 0, 1.9, 0);
+  add(new THREE.BoxGeometry(0.9, 0.7, 0.08), wood, 0, 2.3, 0.42);
+  add(new THREE.CapsuleGeometry(0.2, 0.35, 4, 10), lambert(0x1c2a4a), 0, 2.3, 0.1);
+  add(new THREE.SphereGeometry(0.17, 14, 10), lambert(0xe8c39e), 0, 2.78, 0.08);
+  add(new THREE.CylinderGeometry(0.18, 0.18, 0.08, 14), lambert(0xf5f5f5), 0, 2.9, 0.08);
+  chair.position.set(-(NET_HALF + 1.1), 0, 0);
+  chair.rotation.y = -Math.PI / 2;
+  scene.add(shadowed(chair));
 }
 buildCourt();
 
-const shadowMat = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.28, depthWrite: false });
-function blob(r) {
-  const m = new THREE.Mesh(new THREE.CircleGeometry(r, 20), shadowMat);
+const blob = (r, opacity) => {
+  const m = new THREE.Mesh(new THREE.CircleGeometry(r, 20),
+    new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity, depthWrite: false }));
   m.rotation.x = -Math.PI / 2;
   m.position.y = 0.02;
   scene.add(m);
   return m;
-}
+};
 
 // Omino stile "Mii": testa grande, mani fluttuanti, racchetta che ruota attorno alla spalla.
 // La racchetta punta lungo -z locale (come la parte alta del telefono) e la sua faccia è perpendicolare a y locale (lo schermo).
+// Il busto ("torso") ruota seguendo la racchetta, le gambe restano rivolte verso la rete.
 function makePlayerMesh(color, hairColor) {
-  const g = new THREE.Group();
+  const g = new THREE.Group(), torso = new THREE.Group();
+  g.add(torso);
   const skin = lambert(0xf3cfa8), shirt = lambert(color), white = lambert(0xf5f5f5), dark = lambert(0x262626);
-  const add = (geo, mat, x, y, z, parent = g) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); parent.add(m); return m; };
+  const add = (geo, mat, x, y, z, parent = torso) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); parent.add(m); return m; };
 
   add(new THREE.CapsuleGeometry(0.24, 0.42, 6, 14), shirt, 0, 1.02, 0);
   const legs = [-1, 1].map(s => {
@@ -251,7 +255,7 @@ function makePlayerMesh(color, hairColor) {
 
   const pivot = new THREE.Group();
   pivot.position.set(0.3, 1.2, -0.05);
-  g.add(pivot);
+  torso.add(pivot);
   add(new THREE.SphereGeometry(0.07, 10, 8), skin, 0, 0, -0.32, pivot);
   const handle = add(new THREE.CylinderGeometry(0.02, 0.022, 0.26, 8), dark, 0, 0, -0.48, pivot);
   handle.rotation.x = Math.PI / 2;
@@ -265,15 +269,23 @@ function makePlayerMesh(color, hairColor) {
     new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.45, side: THREE.DoubleSide }), 0, 0, 0, head);
   strings.rotation.x = -Math.PI / 2;
 
-  scene.add(g);
-  return { group: g, pivot, freeHand, legs, shadow: blob(0.45) };
+  scene.add(shadowed(g));
+  return { group: g, torso, pivot, freeHand, legs, shadow: blob(0.4, 0.12) };
 }
 
-// Palla (disegnata più grande del vero per vederla bene sulla TV)
-const ballMesh = new THREE.Mesh(new THREE.SphereGeometry(0.075, 16, 12),
-  new THREE.MeshLambertMaterial({ color: 0xdcf23a, emissive: 0x2a3000 }));
+// Palla con la cucitura disegnata, così si vede girare (più grande del vero per vederla sulla TV)
+const ballMesh = new THREE.Mesh(new THREE.SphereGeometry(0.075, 18, 14), new THREE.MeshLambertMaterial({
+  emissive: 0x2a3000,
+  map: canvasTex(128, 64, (g, w, h) => {
+    g.fillStyle = '#d9ef3a'; g.fillRect(0, 0, w, h);
+    g.strokeStyle = '#f7fbe8'; g.lineWidth = 4; g.beginPath();
+    for (let x = 0; x <= w; x++) { const y = h / 2 + Math.sin((x / w) * Math.PI * 4) * h * 0.28; x ? g.lineTo(x, y) : g.moveTo(x, y); }
+    g.stroke();
+  }),
+}));
+ballMesh.castShadow = true;
 scene.add(ballMesh);
-const ballShadow = blob(0.08);
+const ballShadow = blob(0.08, 0.3);
 
 // ---------------------------------------------------------------------------
 // Stato del gioco
@@ -287,13 +299,14 @@ const players = [0, 1].map(i => ({
   idx: i,
   f: i === 0 ? -1 : 1,                 // direzione (in z) verso l'avversario
   pos: new THREE.Vector3(0, 0, i === 0 ? HALF_L + 0.5 : -HALF_L - 0.5),
+  vel: new THREE.Vector3(),
   target: new THREE.Vector3(0, 0, i === 0 ? HALF_L + 0.5 : -HALF_L - 0.5),
   mesh: makePlayerMesh(PLAYER_COLORS[i], i === 0 ? 0x5d3a1a : 0x222222),
-  hand: 'R', speed: 0, walk: 0, anim: null,
+  hand: 'R', speed: 0, walk: 0, anim: null, bodyYaw: 0, squeakT: 0,
   pending: null, lastCross: null, cpuLetGo: false,
   // rete / telefono
   conn: null, clientId: null, connected: false, name: '',
-  q: new THREE.Quaternion(), hasOrient: false, calibPhi: 0, needCalib: true, tipHist: [],
+  q: new THREE.Quaternion(), hasOrient: false, calibPhi: 0, needCalib: true, hist: [],
 }));
 players[1].mesh.group.rotation.y = Math.PI;
 
@@ -302,7 +315,7 @@ const game = {
   state: 'serve',        // serve | rally | pointOver | faultPause | matchOver
   opts: { games: 3, diff: 1 },
   points: [0, 0], games: [0, 0], server: 0, faults: 0,
-  timer: 0, cpuServeT: 0, retargetT: 0,
+  timer: 0, cpuServeT: 0, retargetT: 0, rally: 0, lastOutBy: 9,
 };
 
 const isCPU = p => game.mode === 'demo' || (p.idx === 1 && !p.connected);
@@ -331,6 +344,8 @@ function setHand(p, h) {
 // ---------------------------------------------------------------------------
 // Avanza la palla di h secondi. Ritorna una maschera: 1 = rimbalzo, 2 = rete.
 function stepBall(b, h) {
+  const sp = b.vel.length();
+  if (sp > 0) b.vel.multiplyScalar(Math.max(0, 1 - DRAG * sp * h));
   b.vel.y -= (G + b.spin * SPIN_G) * h;
   const pz = b.pos.z;
   b.pos.addScaledVector(b.vel, h);
@@ -343,8 +358,9 @@ function stepBall(b, h) {
   if (b.pos.y < BALL_R && b.vel.y < 0) {
     const impact = -b.vel.y, s = b.spin;
     b.pos.y = BALL_R;
-    b.vel.y = impact > 0.5 ? impact * (0.72 + 0.06 * s) : 0;
-    const k = impact > 0.5 ? 0.84 + 0.07 * s : 0.985;
+    // Il top spin fa schizzare la palla alta e veloce, lo slice la tiene bassa e la frena
+    b.vel.y = impact > 0.5 ? impact * (0.73 + 0.07 * s) : 0;
+    const k = impact > 0.5 ? 0.8 + 0.08 * s : 0.985;
     b.vel.x *= k; b.vel.z *= k;
     b.spin = 0;
     if (impact > 0.5) ev |= 1;
@@ -352,9 +368,9 @@ function stepBall(b, h) {
   return ev;
 }
 
-// Velocità iniziale per far atterrare la palla in (tx, tz) con velocità orizzontale vh,
+// Velocità iniziale (senza aria) per atterrare in (tx, tz) con velocità orizzontale vh,
 // abbassando la velocità finché la traiettoria non supera la rete di almeno "clear" metri.
-function solveShot(from, tx, tz, vh, spin, clear) {
+function launch(from, tx, tz, vh, spin, clear) {
   const ge = G + spin * SPIN_G, vel = new THREE.Vector3();
   for (let i = 0; i < 30; i++) {
     const dx = tx - from.x, dz = tz - from.z, T = Math.hypot(dx, dz) / vh;
@@ -369,13 +385,42 @@ function solveShot(from, tx, tz, vh, spin, clear) {
   return vel;
 }
 
+const sim = { pos: new THREE.Vector3(), vel: new THREE.Vector3(), spin: 0 };
+function simulateLanding(from, vel, spin) {
+  sim.pos.copy(from); sim.vel.copy(vel); sim.spin = spin;
+  for (let i = 0; i < 900; i++) {
+    const ev = stepBall(sim, STEP);
+    if (ev & 2) return { net: true };
+    if (ev & 1) return { x: sim.pos.x, z: sim.pos.z };
+  }
+  return null;
+}
+
+// Come launch(), ma corregge la mira simulando il volo con la resistenza dell'aria
+function solveShot(from, tx, tz, vh, spin, clear) {
+  let ax = tx, az = tz, vel = launch(from, ax, az, vh, spin, clear);
+  for (let k = 0; k < 6; k++) {
+    const land = simulateLanding(from, vel, spin);
+    if (!land) break;
+    if (land.net) clear += 0.25;
+    else {
+      const ex = tx - land.x, ez = tz - land.z;
+      if (Math.abs(ex) + Math.abs(ez) < 0.12) break;
+      ax += ex; az += ez;
+    }
+    vel = launch(from, ax, az, vh, spin, clear);
+  }
+  return vel;
+}
+
 const inCourt = (x, z) => Math.abs(x) <= HALF_W + BALL_R && Math.abs(z) <= HALF_L + BALL_R;
 
-// Dove conviene farsi trovare per colpire: dopo il primo rimbalzo nella propria metà,
-// quando la palla scende sotto 1.35 m (oppure molto dietro la linea di fondo).
+// Dove farsi trovare per colpire. Di norma dopo il rimbalzo, quando la palla scende sotto 1.4 m;
+// se però così si finirebbe troppo dietro la linea di fondo (palle alte e cariche), si colpisce in salita.
 function predictContact(p) {
   const s = { pos: ball.pos.clone(), vel: ball.vel.clone(), spin: ball.spin };
-  let own = 0, first = null;
+  // Se la palla ha già rimbalzato nella metà campo del giocatore, quel rimbalzo conta
+  let own = ball.pos.z * p.f < 0 ? ball.bounces : 0, first = null, rise = null;
   for (let i = 0; i < 480; i++) {
     const ev = stepBall(s, STEP);
     const mine = s.pos.z * p.f < 0;
@@ -383,10 +428,14 @@ function predictContact(p) {
       if (!first) first = { x: s.pos.x, z: s.pos.z, out: !mine || !inCourt(s.pos.x, s.pos.z) };
       if (mine && ++own >= 2) break;
     }
-    if (mine && own === 1 && s.vel.y < 0 && s.pos.y < 1.35) return { x: s.pos.x, z: s.pos.z, first };
-    if (mine && Math.abs(s.pos.z) > HALF_L + 3) return { x: s.pos.x, z: s.pos.z, first };
+    if (!mine || own !== 1) continue;
+    const deep = Math.abs(s.pos.z) - HALF_L;          // > 0: dietro la linea di fondo
+    const pt = { x: s.pos.x, z: s.pos.z, y: s.pos.y, first };
+    if (!rise && s.vel.y > 0 && s.pos.y >= 0.8) rise = pt;
+    if (s.vel.y < 0 && s.pos.y < 1.4) return deep > 1.5 && rise ? rise : pt;
+    if (deep > 2.5) return rise || pt;
   }
-  return first ? { x: first.x, z: first.z, first } : null;
+  return first ? { x: first.x, z: first.z, y: 0, first } : null;
 }
 
 function retarget(p) {
@@ -400,9 +449,9 @@ function retarget(p) {
   if (!c) return;
   const fh = (c.x - p.pos.x) * handX(p) >= -0.5;
   p.target.set(
-    clamp(c.x - handX(p) * (fh ? 0.85 : -0.85), -HALF_W - 4, HALF_W + 4),
+    clamp(c.x - handX(p) * (fh ? 0.8 : -0.8), -HALF_W - 4, HALF_W + 4),
     0,
-    -p.f * clamp(Math.abs(c.z), 2.5, HALF_L + 4.5),
+    -p.f * clamp(Math.abs(c.z) + 0.3, 2.0, HALF_L + 4),
   );
 }
 const retargetAll = () => players.forEach(retarget);
@@ -410,33 +459,69 @@ const retargetAll = () => players.forEach(retarget);
 // ---------------------------------------------------------------------------
 // Colpi
 // ---------------------------------------------------------------------------
-// timing: +1 = molto in anticipo (palla incrociata), -1 = molto in ritardo (lungo linea)
-// power: 0..1, spin: -1 (slice) .. +1 (top spin)
-function doHit(p, timing, power, spin) {
-  const errMul = isCPU(p) ? diff().err : 1;
-  const hx = handX(p);
-  const fh = (ball.pos.x - p.pos.x) * hx >= 0;
-  const lob = power < 0.06;
-  const err = (0.3 + 1.1 * Math.abs(timing) ** 3 + 0.6 * power * power) * errMul;
-  const tx = timing * (fh ? -hx : hx) * 3.3 + gauss() * err * 0.5;
-  const depth = lob ? 10.2 : 7.2 + power * 3.2 - Math.max(0, -spin) * 0.8;
-  const tz = p.f * (depth + gauss() * err * 0.5);
-  const s = lob ? 0.15 : spin;
-  const vh = lob ? 11 : 12 + power * 13 + Math.max(0, spin) * 1.5;
-  const clear = lob ? 3.2 : 0.25 + Math.max(0, spin) * 0.5 + (1 - power) * 0.4;
+// Posizione della palla rispetto al giocatore: rel = metri davanti (verso la rete), lat = di lato
+const relOf = p => (ball.pos.z - p.pos.z) * p.f;
+const approachOf = p => -ball.vel.z * p.f;
 
-  ball.vel.copy(solveShot(ball.pos, tx, tz, vh, s, clear));
-  ball.spin = s;
+// La palla è nella zona di colpo del giocatore?
+function hittable(p) {
+  if (game.state !== 'rally' || ball.lastHitter === p.idx || ball.serving || ball.bounces > 1) return false;
+  if (ball.pos.z * p.f >= 0) return false;              // deve essere nella propria metà campo
+  const rel = relOf(p);
+  return rel <= HIT_FRONT && rel >= -HIT_BACK && Math.abs(ball.pos.x - p.pos.x) <= REACH && ball.pos.y <= HIT_MAX_Y;
+}
+
+// timing: +1 = colpita molto davanti (in anticipo), -1 = molto indietro (in ritardo)
+const timingFrom = dt => clamp((dt - 0.05) / 0.25, -1, 1);
+
+// sw = { power 0..1, loft -1..1 (swing dall'alto in basso / dal basso in alto), face -1..1 o null (mira data dalla racchetta) }
+function doHit(p, timing, sw) {
+  const cpu = isCPU(p), errMul = cpu ? diff().err : 1;
+  const hl = handLocal(p), fh = (ball.pos.x - p.pos.x) * handX(p) >= 0;
+  const P = clamp(sw.power, 0, 1), L = clamp(sw.loft, -1, 1);
+  const high = ball.pos.y > 2.0;
+  let type = 'drive';
+  if (high && L < 0.3 && P > 0.2) type = 'smash';
+  else if (P < 0.3 && L > 0.35) type = 'lob';
+  else if (P < 0.2 && L < -0.25) type = 'drop';
+
+  // Direzione: in anticipo = incrociato, in ritardo = lungo linea; col telefono conta soprattutto l'angolo della racchetta
+  let aim = timing * (fh ? -hl : hl);
+  if (sw.face != null) aim = 0.35 * aim + 0.65 * sw.face;
+  const err = (0.25 + 1.0 * Math.abs(timing) ** 3 + 0.7 * P * P + (type === 'smash' ? 0.25 : 0)) * errMul;
+  const tx = rightX(p) * aim * 3.7 + gauss() * err * 0.5;
+
+  let depth, vh, spin, clear;
+  switch (type) {
+    case 'lob': depth = 9.6 + P * 3; vh = 13 + P * 6; spin = 0.3; clear = 3; break;
+    case 'drop': depth = 2.3 + P * 4; vh = 13 + P * 5; spin = -0.4; clear = 0.2; break;
+    case 'smash': depth = 7.5 + P * 3.2; vh = 24 + P * 16; spin = 0.1; clear = 0.05; break;
+    default:
+      spin = clamp(L * 0.9 + 0.1, -0.9, 1);
+      depth = 6.8 + P * 3.9 - Math.max(0, -spin) * 0.6;
+      vh = 13 + P * 20 + Math.max(0, spin) * 1.5;
+      clear = 0.2 + Math.max(0, spin) * 0.6 + (1 - P) * 0.5;
+  }
+  const tz = p.f * (depth + gauss() * err * 0.45);
+
+  ball.vel.copy(solveShot(ball.pos, tx, tz, vh, spin, clear));
+  // Colpi sbagliati di brutto possono finire in rete
+  if (type !== 'lob' && Math.random() < 0.04 * errMul * (timing * timing + P * P)) ball.vel.y -= 0.8 + Math.random();
+  ball.spin = spin;
   ball.lastHitter = p.idx;
   ball.bounces = 0;
   ball.serving = false;
   ball.hitNet = false;
-  afterHit(p, power);
+  if (cpu || !p.connected) startAnim(p, type === 'smash' ? 'serve' : fh ? 'fh' : 'bh');
+  if (P > 0.8 || type === 'smash') sound.grunt(P);
+  afterHit(p, P);
 }
 
 function afterHit(p, power) {
   for (const q of players) { q.pending = null; q.lastCross = null; }
-  sfx('hit', 0.4 + power * 0.6);
+  game.rally++;
+  sound.hit(0.35 + power * 0.65);
+  sound.crowdLevel(0.015, 0.6);
   sendTo(p, { t: 'hit', s: power });
   retargetAll();
   // La CPU, se è brava, lascia andare le palle che finiranno fuori
@@ -455,19 +540,23 @@ function serveToss(p) {
   ball.pos.set(p.pos.x + handX(p) * 0.25, 1.3, p.pos.z + p.f * 0.35);
   ball.vel.set(0, 5.6, 0);
   ball.spin = 0;
-  sfx('toss');
+  sound.toss();
+  sound.crowdLevel(0.01, 0.5);
   setHint();
 }
 
-function serveHit(p, power) {
+function serveHit(p, sw) {
   const apexQ = 1 - Math.min(1, Math.abs(ball.vel.y) / 4.5);
-  const pf = clamp(0.55 * power + 0.45 * apexQ, 0, 1);
+  const pf = clamp(0.6 * sw.power + 0.4 * apexQ, 0, 1);
   const sideSign = -rightX(p) * (isDeuceSide() ? 1 : -1);
-  const err = (0.25 + 0.55 * (1 - apexQ) + 0.35 * pf * pf) * (isCPU(p) ? diff().err : 1);
-  const tx = sideSign * (2.0 + (ball.vel.y / 4.5) * 1.2) + gauss() * err * 0.5;
-  const tz = p.f * (4.4 + 1.5 * pf + gauss() * err * 0.4);
-  ball.vel.copy(solveShot(ball.pos, tx, tz, 17 + pf * 15, 0.1, 0.12));
-  ball.spin = 0.1;
+  const err = (0.25 + 0.55 * (1 - apexQ) + 0.4 * pf * pf) * (isCPU(p) ? diff().err : 1);
+  // Mira: col telefono si sceglie l'angolo (al centro o all'esterno), altrimenti dipende dal tempismo
+  const aim = sw.face != null ? sw.face * 1.5 * rightX(p) : sideSign * (ball.vel.y / 4.5) * 1.2;
+  const tx = sideSign * 2.05 + aim + gauss() * err * 0.5;
+  const tz = p.f * (4.6 + 1.4 * pf + gauss() * err * 0.4);
+  const spin = clamp(0.1 + (sw.loft || 0) * 0.5, -0.4, 0.6);
+  ball.vel.copy(solveShot(ball.pos, tx, tz, 21 + pf * 21, spin, 0.1));
+  ball.spin = spin;
   ball.tossed = false;
   ball.serving = true;
   ball.lastHitter = p.idx;
@@ -476,51 +565,65 @@ function serveHit(p, power) {
   if (!p.hasOrient || !p.connected) startAnim(p, 'serve');
   game.state = 'rally';
   setHint();
+  showSpeed(ball.vel.length());
+  if (pf > 0.75) sound.grunt(pf);
   afterHit(p, pf);
 }
 
 // Swing arrivato da un telefono (o dalla tastiera)
-function onSwing(p, power, spin) {
+function onSwing(p, sw) {
   const t = now();
-  if (!(p.connected && p.hasOrient)) startAnim(p, (ball.pos.x - p.pos.x) * handX(p) >= 0 ? 'fh' : 'bh');
+  if (!(p.connected && p.hasOrient)) startAnim(p, ball.pos.y > 2.1 ? 'serve' : (ball.pos.x - p.pos.x) * handX(p) >= 0 ? 'fh' : 'bh');
   if (game.mode !== 'match') return;
   if (game.state === 'serve' && game.server === p.idx) {
     if (ball.held) serveToss(p);
-    else if (ball.tossed && t - ball.tossTime > 0.18 && ball.pos.y > 1.5) serveHit(p, power);
+    else if (ball.tossed && t - ball.tossTime > 0.18 && ball.pos.y > 1.5) serveHit(p, sw);
     return;
   }
   if (game.state !== 'rally' || ball.lastHitter === p.idx) return;
-  const timingFrom = dt => clamp((dt - 0.06) / 0.26, -1, 1);
-  const rel = (ball.pos.z - p.pos.z) * p.f;   // > 0: la palla deve ancora arrivare
-  const appr = -ball.vel.z * p.f;
-  if (rel > 0) {
-    if (appr > 0.5 && rel / appr <= 0.45) p.pending = { time: t, timing: timingFrom(rel / appr), power, spin };
-  } else if (p.lastCross && t - p.lastCross.time <= 0.13) {
+  const rel = relOf(p), appr = approachOf(p);
+  const dt = appr > 0.5 ? rel / appr : 0;
+  if (hittable(p)) {
+    // La palla è già a portata (anche alta o prima del rimbalzo): si colpisce subito
+    doHit(p, timingFrom(dt), sw);
+  } else if (rel > 0 && appr > 0.5 && dt <= 0.5) {
+    // Swing un po' in anticipo: il colpo parte quando la palla entra nella zona
+    p.pending = { time: t, timing: timingFrom(dt), sw };
+  } else if (rel <= 0 && p.lastCross && t - p.lastCross.time <= 0.15) {
     // Swing un po' in ritardo: colpisci dal punto in cui la palla era all'altezza del giocatore
     ball.pos.copy(p.lastCross.pos);
-    doHit(p, timingFrom(-(t - p.lastCross.time)), power, spin);
+    doHit(p, timingFrom(-(t - p.lastCross.time)), sw);
   }
 }
 
-// Controllo, a ogni passo di fisica, se la palla attraversa il "piano" del giocatore
-function checkCrossing(p, prevZ) {
+function cpuSwing() {
+  const d = diff(), r = Math.random();
+  if (ball.pos.y > 2.1) return { power: 0.6 + Math.random() * 0.35, loft: -0.4, face: null };
+  if (r < 0.05) return { power: 0.15, loft: 0.7, face: null };                       // pallonetto
+  if (r < 0.08 && game.opts.diff > 0) return { power: 0.1, loft: -0.6, face: null };  // palla corta
+  return { power: 0.25 + Math.random() * d.maxPow * 0.75, loft: Math.random() * 1.3 - 0.35, face: null };
+}
+
+// A ogni passo di fisica: swing anticipati in attesa, colpi della CPU, passaggio della palla accanto al giocatore
+function playerStep(p, prevZ) {
   if (ball.lastHitter === p.idx || game.state !== 'rally') return;
-  const r0 = (prevZ - p.pos.z) * p.f, r1 = (ball.pos.z - p.pos.z) * p.f;
-  if (!(r0 > 0 && r1 <= 0)) return;
-  const reachable = Math.abs(ball.pos.x - p.pos.x) <= REACH && ball.pos.y < 2.7 &&
-    ball.pos.z * p.f < 0 && ball.bounces <= 1 && !ball.serving;
-  if (!reachable) return;
-  if (isCPU(p)) {
-    if (p.cpuLetGo || Math.random() > diff().hitProb) return;
-    const d = diff();
-    doHit(p, (Math.random() * 2 - 1) * 0.8, 0.2 + Math.random() * d.maxPow * 0.8, Math.random() * 1.2 - 0.3);
-    return;
-  }
   const t = now();
-  if (p.pending && t - p.pending.time < 0.6) {
-    const pd = p.pending;
-    doHit(p, pd.timing, pd.power, pd.spin);
-  } else {
+  if (!isCPU(p) && p.pending) {
+    if (t - p.pending.time > 0.6) p.pending = null;
+    else if (hittable(p) && (relOf(p) <= 0.15 || t - p.pending.time > 0.25)) {
+      const pd = p.pending;
+      doHit(p, pd.timing, pd.sw);
+      return;
+    }
+  }
+  const r0 = (prevZ - p.pos.z) * p.f, r1 = relOf(p);
+  const crossing = r0 > 0 && r1 <= 0;
+  if (isCPU(p)) {
+    // La CPU colpisce quando la palla le passa accanto (anche alta: smash)
+    if (crossing && hittable(p) && !p.cpuLetGo && Math.random() < diff().hitProb) {
+      doHit(p, (Math.random() * 2 - 1) * 0.8, cpuSwing());
+    }
+  } else if (crossing && Math.abs(ball.pos.x - p.pos.x) <= REACH && ball.pos.y <= HIT_MAX_Y) {
     p.lastCross = { time: t, pos: ball.pos.clone() };
   }
 }
@@ -536,13 +639,17 @@ function onBounce() {
     const sideSign = -rightX(players[h]) * (isDeuceSide() ? 1 : -1);
     const inBox = side === o && Math.abs(ball.pos.z) <= SERVICE_Z + BALL_R &&
       ball.pos.x * sideSign >= -BALL_R && Math.abs(ball.pos.x) <= HALF_W + BALL_R;
+    game.lastOutBy = Math.max(Math.abs(ball.pos.z) - SERVICE_Z, Math.abs(ball.pos.x) - HALF_W, -ball.pos.x * sideSign);
     if (inBox) { ball.serving = false; ball.bounces = 1; }
     else fault(ball.hitNet ? 'Rete!' : 'Fallo!');
     return;
   }
   if (ball.bounces === 0) {
+    game.lastOutBy = Math.max(Math.abs(ball.pos.z) - HALF_L, Math.abs(ball.pos.x) - HALF_W);
     if (side === o && inCourt(ball.pos.x, ball.pos.z)) ball.bounces = 1;
     else pointTo(o, side === h && ball.hitNet ? 'Rete!' : 'Fuori!');
+  } else if (game.rally === 1) {
+    pointTo(h, 'Ace!');
   } else {
     pointTo(h, game.mode === 'match' && players[h].connected ? 'Vincente!' : 'Punto!');
   }
@@ -553,6 +660,8 @@ function fault(reason) {
   if (game.faults >= 2) { pointTo(1 - game.server, 'Doppio fallo!'); return; }
   game.state = 'faultPause';
   game.timer = 1.6;
+  if (game.lastOutBy < 0.3 || reason === 'Rete!') sound.ooh(0.7);
+  sound.crowdLevel(0.05, 1);
   showMessage(reason, 'Seconda di servizio');
   say(reason === 'Rete!' ? 'Rete. Seconda' : 'Fallo');
 }
@@ -568,13 +677,23 @@ function scoreLine() {
   return { text: `${PTS[a]} - ${PTS[b]}`, spoken: `${PTS_SPOKEN[a]} ${PTS_SPOKEN[b]}` };
 }
 
+// Reazione del pubblico a fine punto
+function crowdReaction(reason) {
+  sound.crowdLevel(0.08, 1.5);
+  if (reason === 'Doppio fallo!') { sound.groan(); return; }
+  if (reason === 'Ace!' || game.rally >= 9) { sound.cheer(game.rally >= 14 ? 1.3 : 1); return; }
+  if ((reason === 'Fuori!' && game.lastOutBy < 0.35) || reason === 'Rete!') sound.ooh(reason === 'Rete!' ? 0.6 : 1);
+  sound.applause(0.6 + Math.min(game.rally, 10) * 0.06, 2 + Math.min(game.rally, 10) * 0.12);
+}
+
 function pointTo(w, reason) {
   if (game.state !== 'rally' && game.state !== 'serve' && game.state !== 'faultPause') return;
   game.points[w]++;
-  game.timer = 2.6;
+  game.timer = 2.8;
   game.state = 'pointOver';
   for (const p of players) p.target.copy(p.pos);
-  sfx('applause', 0.8);
+  crowdReaction(reason);
+  const call = reason === 'Fuori!' ? 'Fuori. ' : reason === 'Ace!' ? 'Ace. ' : '';
   const [a, b] = [game.points[w], game.points[1 - w]];
   if (a >= 4 && a - b >= 2) {
     game.games[w]++;
@@ -586,19 +705,21 @@ function pointTo(w, reason) {
         game.state = 'matchOver';
         game.timer = 7;
         showMessage('Partita!', `Vince ${nameOf(w)} ${game.games[w]}-${game.games[1 - w]}`, 6.5);
-        say(`Partita! Vince ${nameOf(w)}`);
-        sfx('applause', 1.4);
+        say(`${call}Gioco, partita e incontro: ${nameOf(w)}`);
+        sound.cheer(1.5);
+        sound.applause(1.6, 5);
         updateHud();
         notifyPhones();
         return;
       }
     }
     showMessage(reason, `Gioco ${nameOf(w)} · ${game.games[0]}-${game.games[1]}`);
-    say(`Gioco ${nameOf(w)}`);
+    say(`${call}Gioco ${nameOf(w)}`);
+    sound.applause(1.1, 3);
   } else {
     const sc = scoreLine();
     showMessage(reason, sc.text);
-    say(sc.spoken);
+    say(call + sc.spoken);
   }
   updateHud();
   notifyPhones();
@@ -606,6 +727,7 @@ function pointTo(w, reason) {
 
 function nextPoint(keepFaults = false) {
   game.state = 'serve';
+  game.rally = 0;
   if (!keepFaults) game.faults = 0;
   const s = players[game.server], r = players[1 - game.server];
   const side = isDeuceSide() ? 1 : -1;
@@ -613,11 +735,12 @@ function nextPoint(keepFaults = false) {
   r.pos.set(rightX(r) * side * 2.8, 0, -r.f * (HALF_L + 0.5));
   for (const p of players) {
     p.target.copy(p.pos);
+    p.vel.set(0, 0, 0);
     p.pending = null; p.lastCross = null; p.cpuLetGo = false; p.anim = null;
   }
   Object.assign(ball, { held: true, tossed: false, serving: false, bounces: 0, lastHitter: game.server, hitNet: false, spin: 0 });
   ball.vel.set(0, 0, 0);
-  game.cpuServeT = game.mode === 'demo' ? 1.0 : 1.3;
+  game.cpuServeT = game.mode === 'demo' ? 1.0 : 1.5;
   setHint();
   updateHud();
   notifyPhones();
@@ -625,6 +748,7 @@ function nextPoint(keepFaults = false) {
 
 function startMatch() {
   game.mode = 'match';
+  sound.setEnabled(true);
   game.points = [0, 0];
   game.games = [0, 0];
   game.server = Math.random() < 0.5 ? 0 : 1;
@@ -633,11 +757,13 @@ function startMatch() {
   nextPoint();
   showMessage('Si gioca!', `Al servizio: ${nameOf(game.server)}`);
   say(`Si gioca! Al servizio ${nameOf(game.server)}`);
+  sound.applause(1, 3);
   sendLobby();
 }
 
 function goLobby() {
   game.mode = 'demo';
+  sound.setEnabled(false);
   game.points = [0, 0];
   game.games = [0, 0];
   $('lobby').hidden = false;
@@ -654,47 +780,69 @@ function goLobby() {
 function startAnim(p, type) { p.anim = { type, t: 0, dur: type === 'serve' ? 0.42 : 0.32 }; }
 
 const Y_AXIS = new THREE.Vector3(0, 1, 0);
-const tmpQ = new THREE.Quaternion(), tmpE = new THREE.Euler(), tmpV = new THREE.Vector3();
+const tmpQ = new THREE.Quaternion(), tmpQ2 = new THREE.Quaternion(), tmpE = new THREE.Euler(), tmpV = new THREE.Vector3();
 
-function calibratedQuat(p, out) {
-  return out.setFromAxisAngle(Y_AXIS, p.calibPhi).multiply(p.q);
+function calibratedQuat(p, out, q = p.q) {
+  return out.setFromAxisAngle(Y_AXIS, p.calibPhi).multiply(q);
 }
 
 function updateRacket(p, dt) {
   const piv = p.mesh.pivot;
+  let bodyTarget;
   if (p.connected && p.hasOrient) {
-    piv.quaternion.slerp(calibratedQuat(p, tmpQ), 0.6);
-    return;
+    // La racchetta segue il telefono; il busto ruota un po' nella stessa direzione
+    calibratedQuat(p, tmpQ);
+    tmpV.set(0, 0, -1).applyQuaternion(tmpQ);
+    bodyTarget = clamp(-tmpV.x * 0.6, -0.7, 0.7);
+    p.bodyYaw = lerp(p.bodyYaw, bodyTarget, 0.25);
+    tmpQ2.setFromAxisAngle(Y_AXIS, -p.bodyYaw).multiply(tmpQ);
+    piv.quaternion.slerp(tmpQ2, 0.85);
+  } else {
+    const h = handLocal(p);
+    let yaw = -0.5 * h, pitch = 0.5, k = 0.25;
+    if (p.anim) {
+      p.anim.t += dt;
+      const e = ease(Math.min(1, p.anim.t / p.anim.dur));
+      if (p.anim.type === 'fh') { yaw = lerp(-2.2, 1.3, e) * h; pitch = lerp(0.15, 0.7, e); }
+      else if (p.anim.type === 'bh') { yaw = lerp(2.4, -1.2, e) * h; pitch = lerp(0.2, 0.7, e); }
+      else { yaw = -0.3 * h; pitch = lerp(3.4, -0.5, e); }
+      k = 1;
+      if (p.anim.t > p.anim.dur + 0.15) p.anim = null;
+    } else if (game.state === 'serve' && game.server === p.idx && ball.tossed) {
+      yaw = -0.3 * h; pitch = 3.0;
+    }
+    tmpQ.setFromEuler(tmpE.set(pitch, yaw, 0, 'YXZ'));
+    piv.quaternion.slerp(tmpQ, k);
+    tmpV.set(0, 0, -1).applyQuaternion(piv.quaternion);
+    p.bodyYaw = lerp(p.bodyYaw, clamp(-tmpV.x * 0.35, -0.6, 0.6), 0.2);
   }
-  const h = handLocal(p);
-  let yaw = -0.5 * h, pitch = 0.5, k = 0.25;
-  if (p.anim) {
-    p.anim.t += dt;
-    const e = ease(Math.min(1, p.anim.t / p.anim.dur));
-    if (p.anim.type === 'fh') { yaw = lerp(-2.2, 1.3, e) * h; pitch = lerp(0.15, 0.7, e); }
-    else if (p.anim.type === 'bh') { yaw = lerp(2.4, -1.2, e) * h; pitch = lerp(0.2, 0.7, e); }
-    else { yaw = -0.3 * h; pitch = lerp(3.4, -0.5, e); }
-    k = 1;
-    if (p.anim.t > p.anim.dur + 0.15) p.anim = null;
-  } else if (game.state === 'serve' && game.server === p.idx && ball.tossed) {
-    yaw = -0.3 * h; pitch = 3.0;
-  }
-  tmpQ.setFromEuler(tmpE.set(pitch, yaw, 0, 'YXZ'));
-  piv.quaternion.slerp(tmpQ, k);
+  p.mesh.torso.rotation.y = p.bodyYaw;
 }
 
 function updatePlayer(p, dt) {
-  const sp = isCPU(p) ? diff().speed : HUMAN_SPEED;
+  // Corsa con accelerazione e frenata (niente scatti istantanei)
+  const cpu = isCPU(p);
+  const maxSp = cpu ? diff().speed : HUMAN_SPEED, acc = cpu ? diff().accel : HUMAN_ACCEL;
   const dx = p.target.x - p.pos.x, dz = p.target.z - p.pos.z, d = Math.hypot(dx, dz);
-  const step = Math.min(d, sp * dt);
-  if (d > 1e-4) { p.pos.x += (dx / d) * step; p.pos.z += (dz / d) * step; }
-  p.speed = lerp(p.speed, step / Math.max(dt, 1e-3), 0.2);
+  const want = d > 0.03 ? Math.min(maxSp, Math.sqrt(2 * acc * d)) : 0;
+  tmpV.set(d > 0 ? (dx / d) * want : 0, 0, d > 0 ? (dz / d) * want : 0).sub(p.vel);
+  const dvMax = acc * dt;
+  if (tmpV.length() > dvMax) tmpV.setLength(dvMax);
+  const before = p.vel.length();
+  p.vel.add(tmpV);
+  p.pos.addScaledVector(p.vel, dt);
+  p.speed = p.vel.length();
+  p.squeakT -= dt;
+  if (before > 4.5 && p.speed < before - 0.6 * dt * acc && p.squeakT <= 0 && game.state === 'rally') {
+    sound.squeak();
+    p.squeakT = 0.6;
+  }
 
   // La CPU inizia lo swing poco prima che arrivi la palla
-  if (isCPU(p) && !p.anim && game.state === 'rally' && ball.lastHitter !== p.idx && !ball.serving && !p.cpuLetGo) {
-    const rel = (ball.pos.z - p.pos.z) * p.f, appr = -ball.vel.z * p.f;
+  if (cpu && !p.anim && game.state === 'rally' && ball.lastHitter !== p.idx && !ball.serving && !p.cpuLetGo) {
+    const rel = relOf(p), appr = approachOf(p);
     if (rel > 0 && appr > 0 && rel / appr < 0.16 && ball.pos.z * p.f < 0 && Math.abs(ball.pos.x - p.pos.x) < REACH + 0.5) {
-      startAnim(p, (ball.pos.x - p.pos.x) * handX(p) >= 0 ? 'fh' : 'bh');
+      startAnim(p, ball.pos.y > 2.1 ? 'serve' : (ball.pos.x - p.pos.x) * handX(p) >= 0 ? 'fh' : 'bh');
     }
   }
 
@@ -705,6 +853,7 @@ function updatePlayer(p, dt) {
   m.legs[0].rotation.x = Math.sin(p.walk) * amp;
   m.legs[1].rotation.x = -Math.sin(p.walk) * amp;
   m.group.position.y = Math.abs(Math.sin(p.walk)) * amp * 0.08;
+  m.torso.rotation.x = -Math.min(1, p.speed / maxSp) * 0.15;   // si piega in avanti quando corre
   m.shadow.position.set(p.pos.x, 0.02, p.pos.z);
   updateRacket(p, dt);
 }
@@ -716,9 +865,9 @@ function physicsStep() {
   if (ball.held) return;
   const prevZ = ball.pos.z;
   const ev = stepBall(ball, STEP);
-  if (ev & 2) { ball.hitNet = true; sfx('net'); }
+  if (ev & 2) { ball.hitNet = true; sound.netHit(); }
   if (ev & 1) {
-    sfx('bounce', Math.min(1, Math.abs(ball.vel.y) / 6));
+    sound.bounce(Math.min(1, Math.abs(ball.vel.y) / 6));
     onBounce();
     if (game.state === 'rally') retargetAll();
   }
@@ -727,9 +876,10 @@ function physicsStep() {
     ball.held = true;
     setHint();
   }
-  for (const p of players) checkCrossing(p, prevZ);
+  for (const p of players) playerStep(p, prevZ);
 }
 
+const spinAxis = new THREE.Vector3();
 function update(dt, steps) {
   game.retargetT -= dt;
   if (game.retargetT <= 0) { game.retargetT = 0.1; retargetAll(); }
@@ -739,7 +889,9 @@ function update(dt, steps) {
     if (isCPU(s)) {
       game.cpuServeT -= dt;
       if (ball.held && game.cpuServeT <= 0) serveToss(s);
-      else if (ball.tossed && ball.vel.y < 0.4 && ball.pos.y > 1.5) serveHit(s, 0.3 + Math.random() * diff().maxPow * 0.7);
+      else if (ball.tossed && ball.vel.y < 0.4 && ball.pos.y > 1.5) {
+        serveHit(s, { power: 0.3 + Math.random() * diff().maxPow * 0.7, loft: Math.random() * 0.6 - 0.2, face: null });
+      }
     }
   } else if (game.state === 'pointOver' || game.state === 'faultPause' || game.state === 'matchOver') {
     game.timer -= dt;
@@ -756,6 +908,13 @@ function update(dt, steps) {
   if (ball.held) {
     const s = players[game.server];
     s.mesh.freeHand.getWorldPosition(ball.pos);
+  } else {
+    // La palla ruota su se stessa: in avanti col top spin, all'indietro con lo slice
+    const sp = Math.hypot(ball.vel.x, ball.vel.z);
+    if (sp > 0.5) {
+      spinAxis.set(ball.vel.z, 0, -ball.vel.x).normalize();
+      ballMesh.rotateOnWorldAxis(spinAxis, (ball.spin * 35 + sp * 0.8) * dt);
+    }
   }
   ballMesh.position.copy(ball.pos);
   ballShadow.position.set(ball.pos.x, 0.02, ball.pos.z);
@@ -769,9 +928,21 @@ function update(dt, steps) {
   camera.lookAt(camera.position.x * 0.5, 0.2, camera.position.z - 23);
 }
 
-let last = now(), physAcc = 0;
+// Qualità automatica: se la TV fatica (meno di ~35 fotogrammi al secondo) si spengono le ombre
+let last = now(), physAcc = 0, perfFrames = 0, perfTime = 0;
+function adaptQuality(rawDt) {
+  if (!sun.castShadow) return;
+  perfFrames++; perfTime += rawDt;
+  if (perfFrames < 90) return;
+  if (perfTime / perfFrames > 1 / 35) {
+    sun.castShadow = false;
+    renderer.setPixelRatio(1);
+  }
+  perfFrames = 0; perfTime = 0;
+}
 function frame() {
   const t = now();
+  adaptQuality(Math.min(0.5, t - last));
   const dt = Math.min(0.05, t - last);
   last = t;
   physAcc += dt;
@@ -785,7 +956,7 @@ function frame() {
 // ---------------------------------------------------------------------------
 // Interfaccia (lobby, tabellone, messaggi)
 // ---------------------------------------------------------------------------
-let msgTimer = 0, toastTimer = 0;
+let msgTimer = 0, toastTimer = 0, speedTimer = 0;
 function showMessage(big, small = '', secs = 2.2) {
   if (game.mode !== 'match') return;
   $('msgBig').textContent = big;
@@ -799,6 +970,14 @@ function toast(text) {
   $('toast').classList.add('show');
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => $('toast').classList.remove('show'), 3500);
+}
+// Velocità del servizio, come nelle dirette TV
+function showSpeed(ms) {
+  if (game.mode !== 'match') return;
+  $('speed').textContent = `Servizio ${Math.round(ms * 3.6)} km/h`;
+  $('speed').classList.add('show');
+  clearTimeout(speedTimer);
+  speedTimer = setTimeout(() => $('speed').classList.remove('show'), 2500);
 }
 
 function updateHud() {
@@ -848,10 +1027,23 @@ $('optGames').addEventListener('click', e => { if (e.target.dataset.v) setOpt('g
 $('optDiff').addEventListener('click', e => { if (e.target.dataset.v) setOpt('diff', +e.target.dataset.v); });
 $('startBtn').addEventListener('click', () => startMatch());
 
+// Tastiera (per provare senza telefono): Spazio = colpo normale, Shift+Spazio = forte,
+// Freccia su = pallonetto, Freccia giù = slice, Frecce sinistra/destra = colpo a sinistra/destra
+const KEY_SWINGS = {
+  Space: { power: 0.6, loft: 0.3, face: null },
+  ArrowUp: { power: 0.15, loft: 0.8, face: null },
+  ArrowDown: { power: 0.5, loft: -0.7, face: null },
+  ArrowLeft: { power: 0.6, loft: 0.3, face: -0.8 },
+  ArrowRight: { power: 0.6, loft: 0.3, face: 0.8 },
+};
 addEventListener('keydown', e => {
-  if (e.code === 'Space') {
+  if (KEY_SWINGS[e.code]) {
     e.preventDefault();
-    if (game.mode === 'match' && !players[0].connected) onSwing(players[0], 0.7, 0.3);
+    if (game.mode === 'match' && !players[0].connected && !e.repeat) {
+      const sw = { ...KEY_SWINGS[e.code] };
+      if (e.shiftKey) sw.power = 0.95;
+      onSwing(players[0], sw);
+    }
   } else if (e.code === 'Enter' && game.mode === 'demo') {
     startMatch();
   } else if (e.code === 'Escape' && game.mode === 'match') {
@@ -943,7 +1135,7 @@ function onData(conn, d) {
   if (!p || p.conn !== conn) return;
   switch (d.t) {
     case 'o': onOrientation(p, d); break;
-    case 'swing': onSwing(p, clamp(+d.p || 0, 0, 1), p.hasOrient ? spinFromTip(p) : 0.3); break;
+    case 'swing': onSwing(p, phoneSwing(p, d)); break;
     case 'calib': p.needCalib = true; if (p.hasOrient) calibrate(p); break;
     case 'hand': setHand(p, d.h); updateLobby(); break;
     case 'opt': if (p.idx === 0 && game.mode !== 'match') setOpt(d.k, +d.v); break;
@@ -959,7 +1151,7 @@ function onHello(conn, d) {
   if (p.conn && p.conn !== conn) { try { p.conn.close(); } catch (e) { /* già chiusa */ } }
   conn.playerIdx = i;
   Object.assign(p, {
-    conn, clientId: d.id, connected: true, hasOrient: false, needCalib: true, tipHist: [],
+    conn, clientId: d.id, connected: true, hasOrient: false, needCalib: true, hist: [],
     name: String(d.name || '').trim().slice(0, 12) || `Giocatore ${i + 1}`,
   });
   setHand(p, d.hand);
@@ -993,11 +1185,10 @@ function onOrientation(p, d) {
   p.hasOrient = true;
   if (p.needCalib) calibrate(p);
   if (first) updateLobby();
-  // Storia della punta della racchetta, per capire se lo swing va verso l'alto (top) o il basso (slice)
-  tmpV.set(0, 0, -1).applyQuaternion(calibratedQuat(p, tmpQ));
+  // Storia degli orientamenti (mezzo secondo): serve per la direzione e l'effetto del colpo
   const t = now();
-  p.tipHist.push({ t, y: tmpV.y });
-  while (p.tipHist.length && t - p.tipHist[0].t > 0.4) p.tipHist.shift();
+  p.hist.push({ t, q: p.q.clone() });
+  while (p.hist.length && t - p.hist[0].t > 0.5) p.hist.shift();
 }
 
 // Ruota il riferimento in modo che la direzione in cui punta ora il telefono corrisponda a "verso la rete"
@@ -1007,14 +1198,46 @@ function calibrate(p) {
   p.needCalib = false;
 }
 
-function spinFromTip(p) {
-  const h = p.tipHist;
-  if (h.length < 2) return 0.2;
+// Orientamento registrato "ago" secondi fa
+function pastQuat(p, ago) {
+  const t = now() - ago;
+  let best = p.hist[p.hist.length - 1];
+  for (const s of p.hist) if (s.t <= t) best = s;
+  return best ? best.q : p.q;
+}
+
+// Direzione del colpo data dalla racchetta al momento dell'impatto: la faccia è perpendicolare al manico,
+// quindi se la punta è "avanti" la palla va incrociata, se è "indietro" va dall'altra parte.
+// Ritorna -1 (tutto a sinistra) .. +1 (tutto a destra) rispetto al giocatore, oppure null se incerto.
+function racketAim(p, ago) {
+  if (!p.hasOrient || !p.hist.length) return null;
+  tmpV.set(0, 0, -1).applyQuaternion(calibratedQuat(p, tmpQ, pastQuat(p, ago)));
+  const len = Math.hypot(tmpV.x, tmpV.z);
+  if (len < 0.35) return null;                 // racchetta quasi verticale: direzione incerta
+  let nx = tmpV.z / len, nz = -tmpV.x / len;   // normale orizzontale della faccia
+  if (nz > 0) { nx = -nx; nz = -nz; }          // quella rivolta verso la rete
+  return clamp(Math.atan2(nx, -nz) / 0.55, -1, 1);
+}
+
+// Movimento verticale della punta della racchetta negli ultimi 150 ms (dal basso in alto = +1)
+function tipLoft(p) {
+  const h = p.hist;
+  if (h.length < 2) return 0;
   const lastS = h[h.length - 1];
   let old = h[0];
   for (const s of h) if (lastS.t - s.t >= 0.15) old = s;
-  const vy = (lastS.y - old.y) / Math.max(0.05, lastS.t - old.t);
-  return Math.abs(vy) < 0.8 ? 0.2 : clamp(vy / 4, -1, 1);
+  const y1 = tmpV.set(0, 0, -1).applyQuaternion(lastS.q).y;
+  const y0 = tmpV.set(0, 0, -1).applyQuaternion(old.q).y;
+  return clamp((y1 - y0) / Math.max(0.05, lastS.t - old.t) / 3, -1, 1);
+}
+
+// Dati dello swing inviati dal telefono: p = potenza, u = traiettoria verticale (dal giroscopio),
+// dt = ms trascorsi dal picco dello swing (≈ momento dell'impatto)
+function phoneSwing(p, d) {
+  const tl = tipLoft(p);
+  const loft = typeof d.u === 'number' ? 0.7 * clamp(d.u, -1, 1) + 0.3 * tl : tl;
+  const ago = clamp((+d.dt || 0) / 1000, 0, 0.2);
+  return { power: clamp(+d.p || 0, 0, 1), loft, face: racketAim(p, ago) };
 }
 
 // ---------------------------------------------------------------------------
@@ -1027,4 +1250,7 @@ startPeer();
 requestAnimationFrame(frame);
 
 // Per il debug dalla console del browser
-window.tennis = { game, ball, players, startMatch, goLobby, onSwing, onData };
+window.tennis = {
+  game, ball, players, startMatch, goLobby, onSwing, onData, hittable,
+  simulate(secs, onTick) { for (let i = 0; i < secs * 60; i++) { update(1 / 60, 2); if (onTick) onTick(); } },
+};

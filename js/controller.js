@@ -16,7 +16,7 @@ const params = new URLSearchParams(location.search);
 $('room').value = (params.get('room') || store.get('tennis.room', '')).toUpperCase();
 $('name').value = store.get('tennis.name', '');
 let hand = store.get('tennis.hand', 'R');
-$('sens').value = store.get('tennis.sens', '50');
+$('sens').value = store.get('tennis.sens2', '65');
 
 function showHand() {
   for (const id of ['handSel', 'handSel2']) for (const b of $(id).querySelectorAll('button')) b.classList.toggle('on', b.dataset.h === hand);
@@ -31,7 +31,7 @@ for (const id of ['handSel', 'handSel2']) {
     send({ t: 'hand', h: hand });
   });
 }
-$('sens').addEventListener('input', () => store.set('tennis.sens', $('sens').value));
+$('sens').addEventListener('input', () => store.set('tennis.sens2', $('sens').value));
 
 // ---------------------------------------------------------------------------
 // Audio e vibrazione (feedback quando colpisci la palla)
@@ -73,51 +73,73 @@ async function enableSensors() {
   addEventListener('deviceorientation', onOrient);
 }
 
+// Direzione "su" (verso il cielo) nel sistema del telefono, ricavata da beta e gamma
+let up = [0, 0, 1];
 let lastOrientSent = 0;
 function onOrient(e) {
   if (e.alpha == null) return;
   orientSeen = true;
+  const b = (e.beta || 0) * Math.PI / 180, g = (e.gamma || 0) * Math.PI / 180;
+  up = [-Math.sin(g) * Math.cos(b), Math.sin(b), Math.cos(g) * Math.cos(b)];
   const t = performance.now();
-  if (t - lastOrientSent < 15) return;
+  if (t - lastOrientSent < 10) return;
   lastOrientSent = t;
   const r = v => Math.round(v * 10) / 10;
   send({ t: 'o', a: r(e.alpha), b: r(e.beta), g: r(e.gamma) });
 }
 
-// Rilevamento dello swing: picco della velocità di rotazione (gradi/s) e dell'accelerazione
+// Rilevamento dello swing.
+// - forza: picco della velocità di rotazione (gradi/s) e dell'accelerazione
+// - traiettoria: la punta del telefono (= testa della racchetta) va verso l'alto o verso il basso?
+//   La sua velocità dovuta alla rotazione è ω × (0,1,0) = (-ωz, 0, ωx), da proiettare sulla direzione "su".
 let swing = null, lastSwing = 0;
-function threshold() { return 650 - (+$('sens').value / 100) * 370; }   // 650..280 °/s
+const recent = [];   // campioni degli ultimi 250 ms
+function threshold() { return 520 - (+$('sens').value / 100) * 360; }   // 520..160 °/s
 
 function onMotion(e) {
   const r = e.rotationRate;
   if (!r || r.alpha == null) return;
   motionSeen = true;
-  const w = Math.hypot(r.alpha || 0, r.beta || 0, r.gamma || 0);
+  const wx = r.beta || 0, wy = r.gamma || 0, wz = r.alpha || 0;
+  const w = Math.hypot(wx, wy, wz);
   const a = e.acceleration && e.acceleration.x != null
     ? Math.hypot(e.acceleration.x, e.acceleration.y, e.acceleration.z) : 0;
   const t = performance.now(), th = threshold();
+  const tipUp = -wz * up[0] + wx * up[2], tipAll = Math.hypot(wz, wx);
+  recent.push({ t, tipUp, tipAll });
+  while (recent.length && t - recent[0].t > 250) recent.shift();
+
   if (!swing) {
-    if (w > th && t - lastSwing > 420) swing = { start: t, peakW: w, peakA: a };
+    if (w > th && t - lastSwing > 350) swing = { start: t, peakW: w, peakA: a, peakT: t };
     return;
   }
-  swing.peakW = Math.max(swing.peakW, w);
+  if (w > swing.peakW) { swing.peakW = w; swing.peakT = t; }
   swing.peakA = Math.max(swing.peakA, a);
-  // Invia appena la rotazione inizia a calare (o dopo 90 ms) per ridurre il ritardo
-  if (w < swing.peakW * 0.85 || t - swing.start > 90) {
-    const pw = clamp((swing.peakW - th) / 1000, 0, 1);
-    const pa = swing.peakA ? clamp((swing.peakA - 8) / 30, 0, 1) : pw;
-    const power = clamp(0.65 * pw + 0.35 * pa, 0, 1);
-    send({ t: 'swing', p: Math.round(power * 100) / 100 });
+  // Invia appena la rotazione cala (≈ subito dopo l'impatto) o dopo 110 ms, per ridurre il ritardo
+  if (w < swing.peakW * 0.7 || t - swing.start > 110) {
+    // Potenza su una scala ampia: swing appena accennato ≈ 0.05, normale ≈ 0.5, fortissimo = 1
+    const pw = Math.pow(clamp((swing.peakW - th) / (1700 - th), 0, 1), 0.8);
+    const pa = swing.peakA ? clamp((swing.peakA - 5) / 35, 0, 1) : pw;
+    const power = clamp(0.6 * pw + 0.4 * pa, 0, 1);
+    let su = 0, sa = 0;
+    for (const s of recent) if (s.t >= swing.start - 120) { su += s.tipUp; sa += s.tipAll; }
+    const loft = sa > 0 ? clamp(su / sa, -1, 1) : 0;
+    send({ t: 'swing', p: Math.round(power * 100) / 100, u: Math.round(loft * 100) / 100, dt: Math.round(t - swing.peakT) });
     lastSwing = t;
     swing = null;
-    showSwing(power);
+    showSwing(power, loft);
   }
 }
 
 let swingFlashTimer = 0;
-function showSwing(power) {
-  $('meterFill').style.width = Math.round(15 + power * 85) + '%';
-  $('swingLabel').textContent = power < 0.06 ? 'Swing lento (pallonetto)' : power > 0.75 ? 'Swing potente!' : 'Swing!';
+function showSwing(power, loft) {
+  $('meterFill').style.width = Math.round(8 + power * 92) + '%';
+  let label = power > 0.75 ? 'Swing potente!' : power < 0.3 ? 'Swing leggero' : 'Swing!';
+  if (power < 0.3 && loft > 0.35) label = 'Pallonetto ⤴';
+  else if (power < 0.2 && loft < -0.25) label = 'Palla corta ⤵';
+  else if (loft > 0.3) label += ' · top spin';
+  else if (loft < -0.3) label += ' · slice';
+  $('swingLabel').textContent = label;
   $('swingBox').classList.add('flash');
   clearTimeout(swingFlashTimer);
   swingFlashTimer = setTimeout(() => {

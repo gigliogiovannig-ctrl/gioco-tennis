@@ -27,14 +27,16 @@ I sensori di movimento dei telefoni funzionano solo su pagine **https**, quindi 
 
 Durante la partita:
 
-- **Spostamenti automatici**: come su Wii, il personaggio corre da solo verso la palla. Tu devi solo fare lo swing al momento giusto.
-- **Tempismo**: swing in anticipo = palla incrociata, in ritardo = lungo linea. Più sei estremo, più rischi di mandarla fuori.
-- **Forza**: più lo swing è veloce, più il colpo è potente e profondo (ma meno preciso).
-- **Effetti**: swing dal basso verso l'alto = top spin, dall'alto verso il basso = slice. Uno swing lentissimo fa un pallonetto.
-- **Servizio**: primo swing per lanciare la palla, secondo swing quando la palla è in alto. Colpirla vicino al punto più alto dà il servizio migliore.
+- **Spostamenti automatici**: come su Wii, il personaggio corre da solo verso la palla. Tu fai lo swing quando la palla è vicina: puoi colpirla subito, anche se è alta o prima che rimbalzi (volée).
+- **Direzione**: conta l'angolo della racchetta (cioè del telefono) al momento dell'impatto. Racchetta perpendicolare alla rete = palla dritta, punta in avanti = incrociato, punta indietro = dall'altra parte. Conta anche il tempismo.
+- **Forza**: lo swing viene misurato su una scala ampia: appena accennato = palla lenta, normale ≈ 90 km/h, fortissimo = oltre 115 km/h (ma meno preciso).
+- **Effetti**: swing dal basso verso l'alto = top spin (palla arcuata che scende e rimbalza alta), dall'alto verso il basso = slice (palla bassa).
+- **Colpi speciali**: piano e dal basso verso l'alto = pallonetto; piano e dall'alto verso il basso = palla corta; palla alta + swing = smash.
+- **Servizio**: primo swing per lanciare la palla, secondo swing quando la palla è in alto. Colpirla vicino al punto più alto dà il servizio migliore; la velocità compare in km/h.
+- **Atmosfera**: brusio del pubblico che si zittisce durante lo scambio, applausi più forti dopo gli scambi lunghi, "oooh" sulle palle vicino alla riga, boati sugli ace.
 - Punteggio tennistico vero: 15-30-40, parità, vantaggi, falli e doppi falli. L'arbitro annuncia il punteggio (se il browser della TV supporta la sintesi vocale).
 
-Senza telefono puoi provare il gioco dalla tastiera: **Invio** per iniziare, **Spazio** per lo swing, **Esc** per tornare alla lobby.
+Senza telefono puoi provare il gioco dalla tastiera: **Invio** per iniziare, **Spazio** per lo swing (**Shift+Spazio** forte), **↑** pallonetto, **↓** slice, **← →** per mirare, **Esc** per tornare alla lobby.
 
 ## Consigli
 
@@ -43,13 +45,15 @@ Senza telefono puoi provare il gioco dalla tastiera: **Invio** per iniziare, **S
 - Se gli swing partono troppo facilmente (o non partono), regola **Sensibilità swing** nelle impostazioni della pagina Racchetta.
 - Se la racchetta “gira” storta col passare del tempo (deriva della bussola), ripremi **Calibra**.
 - Per far partire l'audio sulla TV clicca o premi un tasto una volta.
+- Se il dispositivo collegato alla TV è lento, il gioco spegne da solo le ombre per restare fluido.
 
 ## Struttura
 
 | File | Cosa fa |
 | --- | --- |
 | `index.html`, `css/tv.css` | Pagina della TV: lobby, tabellone, messaggi |
-| `js/game.js` | Grafica 3D (three.js), fisica della palla, regole e punteggio, CPU, connessione con i telefoni |
+| `js/game.js` | Grafica 3D (three.js), fisica della palla (gravità, aria, effetti), regole e punteggio, CPU, connessione con i telefoni |
+| `js/audio.js` | Suoni sintetizzati: colpi, rimbalzi, pubblico |
 | `controller.html`, `css/controller.css`, `js/controller.js` | Pagina del telefono: sensori, rilevamento swing, calibrazione, opzioni |
 | `js/config.js` | Impostazioni condivise (ID PeerJS, colori dei giocatori) |
 | `vendor/` | Librerie incluse: three.js, PeerJS, qrcode-generator (licenze in `vendor/LICENSES.md`) |
