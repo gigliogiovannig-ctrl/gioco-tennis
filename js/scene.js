@@ -1,6 +1,7 @@
 // Scena 3D: campo, stadio, pubblico, luci e telecamera.
 import * as THREE from '../vendor/three.module.min.js';
 import { Athlete, SKIN_TONES, HAIR_COLORS } from './athlete.js';
+import { Crowd } from './crowd.js';
 
 // Misure del campo (metri). x = larghezza, z = lunghezza, y = altezza.
 export const COURT = {
@@ -195,8 +196,6 @@ function buildCourt() {
 // ---------------------------------------------------------------------------
 // Stadio e pubblico
 // ---------------------------------------------------------------------------
-const SHIRTS = [0xc0392b, 0xe8c547, 0x2f6fae, 0xf2f2f2, 0xf2f2f2, 0x4f8a4a, 0x6c3d8f, 0xd9822b, 0x2a2a2a, 0x2a2a2a,
-  0x9fc5e8, 0xe7a2b8, 0x6d4c41, 0x1f6f6a, 0x8a8f99, 0x1d2a44, 0xb7b09c];
 const SEAT_COLORS = [0x1b4f8a, 0x2e7d32];
 
 // Una tribuna a gradoni: lunga "length", sale allontanandosi dal campo (verso -z locale)
@@ -249,84 +248,6 @@ function buildLightTower(x, z) {
   scene.add(g);
 }
 
-export class Crowd {
-  constructor(seats) {
-    const n = seats.length;
-    this.n = n;
-    this.level = 0;
-    this.seats = seats;
-    this.phase = new Float32Array(n);
-    this.freq = new Float32Array(n);
-    this.fan = new Uint8Array(n);
-    // Busto con le spalle (profilo ruotato), seduto sul gradino
-    const bodyGeo = new THREE.LatheGeometry([
-      new THREE.Vector2(0.001, 0), new THREE.Vector2(0.19, 0), new THREE.Vector2(0.17, 0.22), new THREE.Vector2(0.19, 0.42),
-      new THREE.Vector2(0.2, 0.5), new THREE.Vector2(0.15, 0.58), new THREE.Vector2(0.05, 0.62), new THREE.Vector2(0.001, 0.62),
-    ], 10);
-    bodyGeo.scale(1, 1, 0.7);
-    const headGeo = new THREE.SphereGeometry(0.105, 10, 8);
-    const hairGeo = new THREE.SphereGeometry(0.11, 10, 6, 0, Math.PI * 2, 0, Math.PI * 0.5);
-    const armsGeo = new THREE.TorusGeometry(0.24, 0.035, 6, 12, Math.PI);   // braccia alzate ad arco
-    this.bodies = new THREE.InstancedMesh(bodyGeo, std(0xffffff, 0.9), n);
-    this.heads = new THREE.InstancedMesh(headGeo, std(0xffffff, 0.7), n);
-    this.hair = new THREE.InstancedMesh(hairGeo, std(0xffffff, 0.95), n);
-    this.arms = new THREE.InstancedMesh(armsGeo, std(0xffffff, 0.8), n);
-    const c = new THREE.Color();
-    for (let i = 0; i < n; i++) {
-      this.phase[i] = Math.random() * Math.PI * 2;
-      this.freq[i] = 7 + Math.random() * 5;
-      this.fan[i] = Math.random() < 0.55 ? 1 : 0;
-      const shirt = SHIRTS[(Math.random() * SHIRTS.length) | 0];
-      this.bodies.setColorAt(i, c.setHex(shirt));
-      const skin = SKIN_TONES[(Math.random() * SKIN_TONES.length) | 0];
-      this.heads.setColorAt(i, c.setHex(skin));
-      this.arms.setColorAt(i, c.setHex(skin));
-      this.hair.setColorAt(i, c.setHex(HAIR_COLORS[(Math.random() * HAIR_COLORS.length) | 0]));
-    }
-    for (const m of [this.bodies, this.heads, this.hair, this.arms]) {
-      m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-      scene.add(m);
-    }
-    this.dirty = true;
-    this.frame = 0;
-    this.update(0, 0);
-  }
-
-  // Il pubblico si scalda: 0.3 = applauso, 1 = in piedi a esultare
-  excite(level) { this.level = Math.max(this.level, level); this.dirty = true; }
-
-  update(dt, t) {
-    this.level = Math.max(0, this.level - dt * 0.3);
-    if (!this.dirty) return;
-    if (this.level <= 0) this.dirty = false;        // un ultimo aggiornamento per tornare tutti seduti
-    if ((this.frame++ & 1) && this.level > 0) return;   // 30 aggiornamenti al secondo bastano
-    const m = this._m || (this._m = new THREE.Matrix4()), q = this._q || (this._q = new THREE.Quaternion());
-    const s = this._s || (this._s = new THREE.Vector3()), p = this._p || (this._p = new THREE.Vector3());
-    const L = this.level, zero = new THREE.Vector3(0, 0, 0), one = new THREE.Vector3(1, 1, 1);
-    for (let i = 0; i < this.n; i++) {
-      const base = this.seats[i];
-      const standing = this.fan[i] && L > 0.45;
-      const bounce = Math.max(0, Math.sin(t * this.freq[i] + this.phase[i]));
-      const dy = (standing ? 0.3 + bounce * 0.12 * L : bounce * 0.035 * L);
-      p.set(base.x, base.y + dy, base.z);
-      m.compose(p, q.identity(), one);
-      this.bodies.setMatrixAt(i, m);
-      p.y += 0.7;
-      m.compose(p, q, one);
-      this.heads.setMatrixAt(i, m);
-      p.y += 0.02;
-      m.compose(p, q, one);
-      this.hair.setMatrixAt(i, m);
-      const armsUp = standing && bounce > 0.2;
-      p.y += 0.04;
-      q.setFromAxisAngle(_yAxis, Math.atan2(-base.x, -base.z));
-      m.compose(p, q, armsUp ? one : zero);
-      this.arms.setMatrixAt(i, m);
-    }
-    for (const mesh of [this.bodies, this.heads, this.hair, this.arms]) mesh.instanceMatrix.needsUpdate = true;
-  }
-}
-const _yAxis = new THREE.Vector3(0, 1, 0);
 
 function buildStadium() {
   const seats = [];
@@ -340,7 +261,7 @@ function buildStadium() {
     buildStand(side, 2 * HALF_L + 18, 13, seats);
   }
   for (const [x, z] of [[-24, -30], [24, -30], [-24, 22], [24, 22]]) buildLightTower(x, z);
-  return new Crowd(seats);
+  return new Crowd(scene, seats);
 }
 
 buildCourt();
@@ -359,6 +280,32 @@ export const ballMesh = new THREE.Mesh(new THREE.SphereGeometry(0.07, 20, 14), n
 }));
 ballMesh.castShadow = true;
 scene.add(ballMesh);
+
+// Scia viola della palla durante i colpi speciali
+export class Trail {
+  constructor(n = 36) {
+    this.n = n;
+    this.pts = [];
+    this.mesh = new THREE.InstancedMesh(new THREE.SphereGeometry(0.075, 10, 8),
+      new THREE.MeshBasicMaterial({ color: 0xb03cff, transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false }), n);
+    this.mesh.frustumCulled = false;
+    this.mesh.count = 0;
+    scene.add(this.mesh);
+    this._m = new THREE.Matrix4();
+  }
+  update(pos, on) {
+    if (on) this.pts.unshift(pos.clone());
+    else this.pts.pop();
+    if (this.pts.length > this.n) this.pts.length = this.n;
+    this.pts.forEach((p, i) => {
+      const k = 1.6 * (1 - i / this.n);
+      this._m.makeScale(k, k, k).setPosition(p);
+      this.mesh.setMatrixAt(i, this._m);
+    });
+    this.mesh.count = this.pts.length;
+    this.mesh.instanceMatrix.needsUpdate = true;
+  }
+}
 
 export function blob(r, opacity) {
   const m = new THREE.Mesh(new THREE.CircleGeometry(r, 20),

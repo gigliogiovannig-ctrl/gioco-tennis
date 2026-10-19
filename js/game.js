@@ -4,7 +4,7 @@
 import * as THREE from '../vendor/three.module.min.js';
 import { PEER_PREFIX, PEER_OPTIONS, PLAYER_COLORS, PLAYER_COLOR_NAMES, TEAM_NAMES } from './config.js';
 import * as sound from './audio.js';
-import { COURT, renderer, scene, camera, crowd, ballMesh, blob, setShadows } from './scene.js';
+import { COURT, renderer, scene, camera, crowd, ballMesh, blob, setShadows, Trail } from './scene.js';
 import { Athlete, SKIN_TONES, HAIR_COLORS } from './athlete.js';
 
 // ---------------------------------------------------------------------------
@@ -20,6 +20,8 @@ const STEP = 1 / 120;          // passo della fisica
 // Zona di colpo attorno al giocatore: davanti, dietro, di lato e in altezza
 const HIT_FRONT = 1.4, HIT_BACK = 0.6, REACH = 1.8, HIT_MAX_Y = 3.1;
 const HUMAN_SPEED = 7.0, HUMAN_ACCEL = 26;
+const JUMP_DUR = 0.65, JUMP_H = 0.7;   // salto: durata (s) e altezza (m)
+const SPECIAL_NAMES = { fulmine: 'Fulmine', meteora: 'Meteora', zigzag: 'Serpente' };
 const DIFF = [
   { name: 'Facile', speed: 5.0, accel: 16, hitProb: 0.78, err: 1.35, maxPow: 0.5, readsOut: 0.3 },
   { name: 'Normale', speed: 6.2, accel: 20, hitProb: 0.9, err: 1.1, maxPow: 0.75, readsOut: 0.7 },
@@ -66,8 +68,10 @@ camera.position.set(0, 5.4, HALF_L + 9);
 const ball = {
   pos: new THREE.Vector3(), vel: new THREE.Vector3(), spin: 0,
   held: true, tossed: false, tossTime: 0, serving: false, bounces: 0, lastHitter: 0, lastTeam: 0, hitNet: false,
+  special: null, curve: 0, curveT: 0,
 };
 const ballShadow = blob(0.08, 0.3);
+const trail = new Trail();
 
 // Telefoni collegati: 4 posti. Il posto i comanda il giocatore i (0 e 2 squadra rossa, 1 e 3 squadra blu).
 const controllers = [0, 1, 2, 3].map(slot => ({
@@ -90,8 +94,9 @@ const players = [0, 1, 2, 3].map(i => {
     pos: new THREE.Vector3(), vel: new THREE.Vector3(), target: new THREE.Vector3(),
     mesh, shadow: blob(0.35, 0.12), ctrl: controllers[i],
     speed: 0, anim: null, bodyYaw: 0, squeakT: 0, racketQ: new THREE.Quaternion(),
-    pending: null, lastCross: null, cpuLetGo: false,
+    pending: null, lastCross: null, cpuLetGo: false, attack: null,
     active: false, netRole: false, laneX: 0, homeZ: 0,
+    energy: 0, jumpT: -1, armedUntil: 0, celebrate: null, sad: false, spinYaw: 0,
   };
 });
 
@@ -154,6 +159,7 @@ function stepBall(b, h) {
   const sp = b.vel.length();
   if (sp > 0) b.vel.multiplyScalar(Math.max(0, 1 - DRAG * sp * h));
   b.vel.y -= (G + b.spin * SPIN_G) * h;
+  if (b.curve) { b.curveT += h; b.vel.x += Math.cos(b.curveT * 7) * b.curve * h; }   // colpo speciale "a serpente"
   const pz = b.pos.z;
   b.pos.addScaledVector(b.vel, h);
   let ev = 0;
@@ -170,6 +176,7 @@ function stepBall(b, h) {
     const k = impact > 0.5 ? 0.8 + 0.08 * s : 0.985;
     b.vel.x *= k; b.vel.z *= k;
     b.spin = 0;
+    b.curve = 0;
     if (impact > 0.5) ev |= 1;
   }
   return ev;
@@ -261,6 +268,19 @@ function predictVolley(p) {
   return null;
 }
 
+// Punto in cui il giocatore può raggiungere la palla prima del rimbalzo (per gli attacchi al volo)
+function predictAirIntercept(p) {
+  const s = { pos: ball.pos.clone(), vel: ball.vel.clone(), spin: ball.spin };
+  const maxSp = isCPU(p) ? diff().speed : HUMAN_SPEED;
+  for (let i = 1; i < 400; i++) {
+    if (stepBall(s, STEP) & 1) return null;
+    if (s.pos.z * p.f >= 0 || s.pos.y < 0.5 || s.pos.y > HIT_MAX_Y - 0.4) continue;
+    const t = i * STEP, d = Math.hypot(s.pos.x - p.pos.x, s.pos.z - p.pos.z) - REACH * 0.6;
+    if (d <= maxSp * t * 0.85) return { x: s.pos.x, z: s.pos.z, y: s.pos.y };
+  }
+  return null;
+}
+
 // Nel doppio: quale dei due compagni va sulla palla
 function claimerOf(team) {
   const mates = game.teams[team];
@@ -284,6 +304,7 @@ function chase(p, pt) {
 
 function retarget(p) {
   if (game.state !== 'rally' || !p.active) return;
+  if (p.attack) { p.target.set(p.attack.pt.x - handX(p) * 0.7, 0, p.attack.pt.z); return; }
   const mates = game.teams[p.team];
   if (ball.lastTeam === p.team) {
     // Ci si rimette in posizione: al centro nel singolo, ognuno nella sua metà nel doppio
@@ -295,6 +316,8 @@ function retarget(p) {
   if (mates.length === 1) { chase(p, predictContact(p)); return; }
   const claim = game.claims[p.team];
   if (claim && claim.p === p) chase(p, claim.pt);
+  // il giocatore di dietro segue sempre la palla: se il compagno a rete la manca, ci arriva lui
+  else if (!p.netRole && (!claim || claim.p.netRole)) chase(p, predictContact(p));
   else if (p.netRole) p.target.set(clamp(ball.pos.x * 0.4 + p.laneX * 1.4, -HALF_W_D, HALF_W_D), 0, -p.f * p.homeZ);
   else p.target.set(p.laneX * 2.6, 0, -p.f * (HALF_L + 0.6));
 }
@@ -316,7 +339,24 @@ function hittable(p) {
   if (game.rally === 1 && p !== receiverOf(players[game.server])) return false;   // risponde al servizio solo chi riceve
   if (ball.pos.z * p.f >= 0) return false;              // deve essere nella propria metà campo
   const rel = relOf(p);
-  return rel <= HIT_FRONT && rel >= -HIT_BACK && Math.abs(ball.pos.x - p.pos.x) <= REACH && ball.pos.y <= HIT_MAX_Y;
+  return rel <= HIT_FRONT && rel >= -HIT_BACK && Math.abs(ball.pos.x - p.pos.x) <= REACH && ball.pos.y <= HIT_MAX_Y + jumpHeight(p);
+}
+
+// Salto: il giocatore si alza da terra; se la barra dell'energia è piena, il colpo successivo è speciale
+const jumpHeight = p => (p.jumpT >= 0 ? 4 * JUMP_H * (p.jumpT / JUMP_DUR) * (1 - p.jumpT / JUMP_DUR) : 0);
+function startJump(p) {
+  if (!p.active || p.jumpT >= 0 || game.paused) return;
+  p.jumpT = 0;
+  if (p.energy >= 1 && game.mode === 'match') {
+    p.armedUntil = now() + 1.6;
+    if (!isCPU(p)) showMessage('⚡ Colpo speciale pronto!', 'Colpisci adesso!', 1.2);
+    sendTo(p, { t: 'armed' });
+  }
+}
+function addEnergy(p, v) {
+  const before = p.energy;
+  p.energy = clamp(p.energy + v, 0, 1);
+  if (p.energy !== before) { sendTo(p, { t: 'energy', v: p.energy }); updateEnergyHud(); }
 }
 
 // timing: +1 = colpita molto davanti (in anticipo), -1 = molto indietro (in ritardo)
@@ -324,21 +364,24 @@ const timingFrom = dt => clamp((dt - 0.05) / 0.25, -1, 1);
 
 // sw = { power 0..1, loft -1..1 (swing dall'alto in basso / dal basso in alto), face -1..1 o null (mira data dalla racchetta) }
 function doHit(p, timing, sw) {
-  const cpu = isCPU(p), errMul = cpu ? diff().err : 1;
+  if (p.energy >= 1 && (p.jumpT >= 0 || p.armedUntil > now())) { doSpecial(p, sw); return; }
+  const phone = sw.face != null;
+  // col telefono si sbaglia meno (la direzione la decide la racchetta), e il "punto dolce" premia
+  const cpu = isCPU(p), errMul = (cpu ? diff().err : phone ? 0.6 : 1) * (Math.abs(timing) < 0.3 ? 0.75 : 1);
   const hl = handLocal(p), fh = (ball.pos.x - p.pos.x) * handX(p) >= 0;
   const P = clamp(sw.power, 0, 1), L = clamp(sw.loft, -1, 1);
   const high = ball.pos.y > 2.0;
   const volley = ball.bounces === 0 && Math.abs(p.pos.z) < SERVICE_Z + 1;
   let type = 'drive';
-  if (high && L < 0.3 && P > 0.2) type = 'smash';
+  if ((high || p.jumpT >= 0) && L < 0.3 && P > 0.2) type = 'smash';
   else if (P < 0.3 && L > 0.35) type = 'lob';
   else if (P < 0.2 && L < -0.25) type = 'drop';
 
   // Direzione: in anticipo = incrociato, in ritardo = lungo linea; col telefono conta soprattutto l'angolo della racchetta
   let aim = timing * (fh ? -hl : hl);
-  if (sw.face != null) aim = 0.35 * aim + 0.65 * sw.face;
+  if (phone) aim = 0.2 * aim + 0.8 * sw.face;
   const err = (0.25 + 1.0 * Math.abs(timing) ** 3 + 0.7 * P * P + (type === 'smash' ? 0.25 : 0)) * errMul;
-  const tx = rightX(p) * aim * (halfWidth() - 0.4) + gauss() * err * 0.5;
+  const tx = rightX(p) * aim * (halfWidth() - 0.4) + gauss() * err * (phone ? 0.35 : 0.5);
 
   let depth, vh, spin, clear;
   switch (type) {
@@ -352,26 +395,76 @@ function doHit(p, timing, sw) {
       clear = 0.2 + Math.max(0, spin) * 0.6 + (1 - P) * 0.5;
       if (volley) { depth -= 1.2; vh *= 0.85; clear = 0.15; }
   }
-  const tz = p.f * (depth + gauss() * err * 0.45);
+  const tz = p.f * (depth + gauss() * err * (phone ? 0.3 : 0.45));
 
   ball.vel.copy(solveShot(ball.pos, tx, tz, vh, spin, clear));
   // Colpi sbagliati di brutto possono finire in rete
-  if (type !== 'lob' && Math.random() < 0.04 * errMul * (timing * timing + P * P)) ball.vel.y -= 0.8 + Math.random();
+  if (type !== 'lob' && Math.abs(timing) > 0.4 && Math.random() < 0.04 * errMul * (timing * timing + P * P)) ball.vel.y -= 0.8 + Math.random();
   ball.spin = spin;
   ball.lastHitter = p.idx;
   ball.lastTeam = p.team;
   ball.bounces = 0;
   ball.serving = false;
   ball.hitNet = false;
+  ball.special = null;
+  ball.curve = 0;
   if (!human(p) || !p.ctrl.hasOrient) startAnim(p, type === 'smash' ? 'serve' : fh ? 'fh' : 'bh');
   if (P > 0.8 || type === 'smash') sound.grunt(P);
+  addEnergy(p, 0.2 + (P > 0.7 ? 0.05 : 0));
   afterHit(p, P);
 }
 
+// Colpi speciali (salto con la barra dell'energia piena): scia viola e grido "PACIULLOOO".
+// Swing normale/forte = Fulmine (velocissimo e radente), dal basso in alto = Meteora (sale altissima
+// e precipita), dall'alto in basso = Serpente (fa lo slalom in aria).
+function doSpecial(p, sw) {
+  const kind = sw.loft > 0.35 ? 'meteora' : sw.loft < -0.3 ? 'zigzag' : 'fulmine';
+  const aim = sw.face != null ? sw.face : (Math.random() < 0.5 ? -0.8 : 0.8);
+  const hw = halfWidth() - 0.5;
+  let tx, tz, vh, spin, clear;
+  if (kind === 'fulmine') { tx = aim * hw; tz = HALF_L - 0.8; vh = 44; spin = 0.3; clear = 0.08; }
+  else if (kind === 'meteora') { tx = aim * hw * 0.7; tz = HALF_L - 1.5; vh = 15; spin = 2.2; clear = 4; }
+  else { tx = aim * hw * 0.4; tz = HALF_L - 2.5; vh = 30; spin = 0.4; clear = 0.25; }
+  tx *= rightX(p);
+  ball.vel.copy(solveShot(ball.pos, tx, p.f * tz, vh, spin, clear));
+  Object.assign(ball, { spin, lastHitter: p.idx, lastTeam: p.team, bounces: 0, serving: false, hitNet: false,
+    special: kind, curve: kind === 'zigzag' ? 32 : 0, curveT: 0 });
+  p.energy = 0;
+  p.armedUntil = 0;
+  sendTo(p, { t: 'energy', v: 0 });
+  updateEnergyHud();
+  if (!human(p) || !p.ctrl.hasOrient) startAnim(p, 'serve');
+  showMessage('PACIULLOOOO!', `⚡ ${nameOf(p)}: ${SPECIAL_NAMES[kind]}`, 1.8);
+  $('message').classList.add('special');
+  shout();
+  sound.swoosh();
+  crowd.excite(0.8);
+  afterHit(p, 1);
+}
+
+// "PACIULLOOOOO!" gridato con la voce del sistema, oppure sintetizzato
+function shout() {
+  if (game.mode !== 'match') return;
+  let spoken = false;
+  try {
+    if ('speechSynthesis' in window && speechSynthesis.getVoices().length) {
+      speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance('Paciulloooooo!');
+      u.lang = 'it-IT'; u.rate = 0.8; u.pitch = 1.5; u.volume = 1;
+      speechSynthesis.speak(u);
+      spoken = true;
+    }
+  } catch (e) { /* niente voce */ }
+  if (!spoken) sound.paciullo();
+}
+
 function afterHit(p, power) {
-  for (const q of players) { q.pending = null; q.lastCross = null; }
+  for (const q of players) { q.pending = null; q.lastCross = null; q.attack = null; }
+  ballMesh.material.emissive.setHex(ball.special ? 0x7a20c0 : 0x3a4200);   // palla viola durante i colpi speciali
   game.rally++;
   sound.hit(0.35 + power * 0.65);
+  // Ogni tanto, quando un giocatore vero colpisce, si sente il verso di un animale
+  if (!isCPU(p) && Math.random() < 0.15) { const label = sound.animal(); if (label) popAnimal(label); }
   sound.crowdLevel(0.015, 0.6);
   sendTo(p, { t: 'hit', s: power });
   retargetAll();
@@ -442,6 +535,10 @@ function onSwing(p, sw) {
   } else if (rel > 0 && appr > 0.5 && dt <= 0.5) {
     // Swing un po' in anticipo: il colpo parte quando la palla entra nella zona
     p.pending = { time: t, timing: timingFrom(dt), sw };
+  } else if (rel > 0 && appr > 0.5 && ball.bounces === 0 && !ball.serving && game.rally > 1) {
+    // Swing molto in anticipo con la palla ancora in volo: il giocatore scatta e la prende al volo
+    const pt = predictAirIntercept(p);
+    if (pt) { p.attack = { time: t, sw, pt }; p.target.set(pt.x - handX(p) * 0.7, 0, pt.z); }
   } else if (rel <= 0 && p.lastCross && t - p.lastCross.time <= 0.15) {
     // Swing un po' in ritardo: colpisci dal punto in cui la palla era all'altezza del giocatore
     ball.pos.copy(p.lastCross.pos);
@@ -461,6 +558,10 @@ function cpuSwing() {
 function playerStep(p, prevZ) {
   if (!p.active || ball.lastTeam === p.team || game.state !== 'rally') return;
   const t = now();
+  if (!isCPU(p) && p.attack) {
+    if (ball.bounces > 0 || t - p.attack.time > 3) p.attack = null;
+    else if (hittable(p) && relOf(p) <= 0.3) { const sw = p.attack.sw; p.attack = null; doHit(p, 0, sw); return; }
+  }
   if (!isCPU(p) && p.pending) {
     if (t - p.pending.time > 0.6) p.pending = null;
     else if (hittable(p) && (relOf(p) <= 0.15 || t - p.pending.time > 0.25)) {
@@ -473,7 +574,9 @@ function playerStep(p, prevZ) {
   const crossing = r0 > 0 && r1 <= 0;
   if (isCPU(p)) {
     // La CPU colpisce quando la palla le passa accanto (anche alta: smash; prima del rimbalzo: volée)
-    if (crossing && hittable(p) && !p.cpuLetGo && Math.random() < diff().hitProb) {
+    // contro un colpo speciale anche la CPU fa fatica
+    if (crossing && hittable(p) && !p.cpuLetGo && Math.random() < diff().hitProb * (ball.special ? 0.5 : 1)) {
+      if (p.energy >= 1 && game.mode === 'match' && Math.random() < 0.5) startJump(p);
       doHit(p, (Math.random() * 2 - 1) * 0.8, cpuSwing());
     }
   } else if (crossing && Math.abs(ball.pos.x - p.pos.x) <= REACH && ball.pos.y <= HIT_MAX_Y) {
@@ -545,7 +648,13 @@ function pointTo(w, reason) {
   game.points[w]++;
   game.timer = 2.8;
   game.state = 'pointOver';
-  for (const p of players) p.target.copy(p.pos);
+  for (const p of players) {
+    p.target.copy(p.pos);
+    p.attack = null;
+    if (!p.active) continue;
+    if (p.team === w) p.celebrate = { type: CELEBRATIONS[(Math.random() * CELEBRATIONS.length) | 0], t: 0 };
+    else p.sad = true;
+  }
   crowdReaction(reason);
   const call = reason === 'Fuori!' ? 'Fuori. ' : reason === 'Ace!' ? 'Ace. ' : '';
   const [a, b] = [game.points[w], game.points[1 - w]];
@@ -582,15 +691,20 @@ function pointTo(w, reason) {
   notifyPhones();
 }
 
+const CELEBRATIONS = ['braccia', 'pugno', 'giravolta', 'inchino', 'salto'];
+
 function nextPoint(keepFaults = false) {
   game.state = 'serve';
+  Object.assign(ball, { special: null, curve: 0 });
+  ballMesh.material.emissive.setHex(0x3a4200);
   game.rally = 0;
   if (!keepFaults) game.faults = 0;
   const s = players[game.server], r = receiverOf(s);
   const side = isDeuceSide() ? 1 : -1;
   for (const p of players) {
     p.netRole = false;
-    p.pending = null; p.lastCross = null; p.cpuLetGo = false; p.anim = null;
+    p.pending = null; p.lastCross = null; p.cpuLetGo = false; p.anim = null; p.attack = null;
+    p.celebrate = null; p.sad = false; p.spinYaw = 0; p.jumpT = -1; p.armedUntil = 0;
     p.vel.set(0, 0, 0);
   }
   s.pos.set(rightX(s) * side * (game.opts.doubles ? 1.6 : 0.9), 0, -s.f * (HALF_L + 0.35));
@@ -618,6 +732,7 @@ function nextPoint(keepFaults = false) {
 
 function resetScore() {
   chooseActive();
+  for (const p of players) p.energy = 0;
   game.points = [0, 0];
   game.games = [0, 0];
   game.serveStart = Math.random() < 0.5 ? 0 : 1;
@@ -741,14 +856,40 @@ function updatePlayer(p, dt) {
   updateRacket(p, dt);
   const m = p.mesh;
   if (m.hand !== handLocal(p)) m.setHand(handLocal(p));
-  m.root.position.copy(p.pos);
-  m.root.rotation.y = p.team === 0 ? 0 : Math.PI;
+
+  // Salto
+  let jumpY = 0, air = 0;
+  if (p.jumpT >= 0) {
+    p.jumpT += dt;
+    if (p.jumpT >= JUMP_DUR) p.jumpT = -1;
+    else { jumpY = jumpHeight(p); air = Math.sin(Math.PI * p.jumpT / JUMP_DUR); }
+  }
   const serving = game.state === 'serve' && game.server === p.idx;
+  let freeMode = serving && ball.held ? 'hold' : serving && ball.tossed ? 'toss' : 'idle';
+  let headDown = 0, bow = 0;
   m.crouch = game.state === 'rally' || (game.state === 'serve' && !serving) ? 0.45 : 0.2;
-  m.update(dt, {
-    speed: p.speed, bodyYaw: p.bodyYaw, racket: p.racketQ,
-    freeMode: serving && ball.held ? 'hold' : serving && ball.tossed ? 'toss' : 'idle',
-  });
+
+  // Esultanze dopo un punto vinto, testa bassa dopo un punto perso
+  const c = p.celebrate;
+  if (c) {
+    c.t += dt;
+    const up = tmpQ.setFromEuler(tmpE.set(Math.PI / 2 + Math.sin(c.t * 8) * 0.25, 0, 0, 'YXZ'));
+    p.racketQ.slerp(up, 0.3);
+    p.bodyYaw = lerp(p.bodyYaw, 0, 0.2);
+    m.crouch = 0.15;
+    if (c.type === 'braccia') { freeMode = 'up'; jumpY = Math.max(0, Math.sin(c.t * 9)) * 0.18; }
+    else if (c.type === 'pugno') { freeMode = 'fist'; m.crouch = 0.5; p.racketQ.slerp(tmpQ.setFromEuler(tmpE.set(0.3, -0.6 * handLocal(p), 0, 'YXZ')), 0.3); }
+    else if (c.type === 'giravolta') { freeMode = 'up'; p.spinYaw = Math.min(1, c.t / 0.8) * Math.PI * 2; }
+    else if (c.type === 'inchino') { freeMode = 'bow'; bow = c.t > 0.4 ? Math.min(1, (c.t - 0.4) * 3) * (c.t < 1.8 ? 1 : Math.max(0, 1 - (c.t - 1.8) * 3)) : 0; }
+    else if (c.type === 'salto') { freeMode = 'up'; const k = c.t / 0.8; if (k < 1) { jumpY = 4 * 0.75 * k * (1 - k); air = Math.sin(Math.PI * k); } }
+  } else if (p.sad) {
+    headDown = 1;
+    m.crouch = 0.1;
+  }
+  m.root.position.copy(p.pos);
+  m.root.position.y = jumpY;
+  m.root.rotation.y = (p.team === 0 ? 0 : Math.PI) + p.spinYaw;
+  m.update(dt, { speed: p.speed, bodyYaw: p.bodyYaw, racket: p.racketQ, freeMode, air, headDown, bow });
   p.shadow.position.set(p.pos.x, 0.02, p.pos.z);
 }
 
@@ -777,7 +918,7 @@ const spinAxis = new THREE.Vector3();
 let clock = 0;
 function update(dt, steps) {
   clock += dt;
-  crowd.update(dt, clock);
+  crowd.update(dt, clock, ball.pos);
   if (game.paused) return;
 
   game.retargetT -= dt;
@@ -815,6 +956,7 @@ function update(dt, steps) {
     }
   }
   ballMesh.position.copy(ball.pos);
+  trail.update(ball.pos, !!ball.special && !ball.held);
   ballShadow.position.set(ball.pos.x, 0.02, ball.pos.z);
   ballShadow.scale.setScalar(1 + Math.min(ball.pos.y, 5) * 0.15);
 
@@ -828,13 +970,18 @@ function update(dt, steps) {
   camera.lookAt(camera.position.x * 0.5, 0.2, camera.position.z - 23);
 }
 
-// Qualità automatica: se la TV fatica (meno di ~35 fotogrammi al secondo) si spengono le ombre
-let last = now(), physAcc = 0, perfFrames = 0, perfTime = 0, shadowsOn = true;
+// Qualità automatica: se la TV fatica (meno di ~35 fotogrammi al secondo) si spengono prima le ombre,
+// poi i dettagli del pubblico
+let last = now(), physAcc = 0, perfFrames = 0, perfTime = 0, quality = 2;
 function adaptQuality(rawDt) {
-  if (!shadowsOn) return;
+  if (quality === 0) return;
   perfFrames++; perfTime += rawDt;
   if (perfFrames < 90) return;
-  if (perfTime / perfFrames > 1 / 35) { shadowsOn = false; setShadows(false); }
+  if (perfTime / perfFrames > 1 / 35) {
+    quality--;
+    if (quality === 1) setShadows(false);
+    else crowd.setLite(true);
+  }
   perfFrames = 0; perfTime = 0;
 }
 function frame() {
@@ -856,6 +1003,7 @@ function frame() {
 let msgTimer = 0, toastTimer = 0, speedTimer = 0;
 function showMessage(big, small = '', secs = 2.2) {
   if (game.mode !== 'match') return;
+  $('message').classList.remove('special');
   $('msgBig').textContent = big;
   $('msgSmall').textContent = small;
   $('message').classList.add('show');
@@ -878,6 +1026,7 @@ function showSpeed(ms) {
 }
 
 function updateHud() {
+  updateEnergyHud();
   for (const t of [0, 1]) {
     const row = $('sb' + t), a = game.points[t], b = game.points[1 - t];
     row.querySelector('.name').textContent = teamName(t);
@@ -885,6 +1034,26 @@ function updateHud() {
     row.querySelector('.pts').textContent = a >= 3 && b >= 3 ? (a > b ? 'V' : '40') : PTS[Math.min(a, 3)];
     row.querySelector('.serve').classList.toggle('on', players[game.server].team === t);
   }
+}
+
+// Barre dell'energia (colpo speciale) dei giocatori in campo
+function updateEnergyHud() {
+  const el = $('energy');
+  if (!el) return;
+  const rows = [...game.teams[0], ...game.teams[1]].map(p => {
+    const full = p.energy >= 1;
+    return `<div class="erow${full ? ' full' : ''}"><span class="edot" style="background:${PLAYER_COLORS[p.idx]}"></span>` +
+      `<span class="ebar"><span style="width:${Math.round(p.energy * 100)}%"></span></span>${full ? '⚡' : ''}</div>`;
+  });
+  el.innerHTML = rows.join('');
+}
+
+let animalTimer = 0;
+function popAnimal(label) {
+  $('animal').textContent = label;
+  $('animal').classList.add('show');
+  clearTimeout(animalTimer);
+  animalTimer = setTimeout(() => $('animal').classList.remove('show'), 1600);
 }
 
 function setHint() {
@@ -951,6 +1120,9 @@ addEventListener('keydown', e => {
       if (e.shiftKey) sw.power = 0.95;
       onSwing(p, sw);
     }
+  } else if (e.code === 'KeyJ') {
+    const p = game.teams[0][0];
+    if (p && isKeyboard(p)) startJump(p);
   } else if (e.code === 'Enter') {
     if (game.mode === 'demo') startMatch();
     else if (game.paused) setPaused(false);
@@ -1059,6 +1231,7 @@ function onData(conn, d) {
   switch (d.t) {
     case 'o': onOrientation(c, d); break;
     case 'swing': onSwing(p, phoneSwing(c, d)); break;
+    case 'jump': startJump(p); break;
     case 'calib': c.needCalib = true; if (c.hasOrient) calibrate(c); break;
     case 'hand': c.hand = d.h === 'L' ? 'L' : 'R'; updateLobby(); break;
     case 'team': if (game.mode !== 'match') switchTeam(c); break;
@@ -1187,7 +1360,10 @@ function phoneSwing(c, d) {
   const tl = tipLoft(c);
   const loft = typeof d.u === 'number' ? 0.7 * clamp(d.u, -1, 1) + 0.3 * tl : tl;
   const ago = clamp((+d.dt || 0) / 1000, 0, 0.2);
-  return { power: clamp(+d.p || 0, 0, 1), loft, face: racketAim(c, ago) };
+  // media di alcuni campioni attorno al momento dell'impatto: la mira è più stabile
+  const aims = [ago + 0.03, ago + 0.015, ago, Math.max(0, ago - 0.015)].map(a => racketAim(c, a)).filter(a => a != null);
+  const face = aims.length ? aims.reduce((x, y) => x + y, 0) / aims.length : null;
+  return { power: clamp(+d.p || 0, 0, 1), loft, face };
 }
 
 // ---------------------------------------------------------------------------
@@ -1202,6 +1378,6 @@ requestAnimationFrame(frame);
 
 // Per il debug dalla console del browser
 window.tennis = {
-  game, ball, players, controllers, camera, startMatch, goLobby, onSwing, onData, onClose, hittable, setOpt, setPaused,
+  game, ball, players, controllers, camera, renderer, startMatch, goLobby, onSwing, onData, onClose, hittable, setOpt, setPaused,
   simulate(secs, onTick) { for (let i = 0; i < secs * 60; i++) { update(1 / 60, 2); if (onTick) onTick(); } },
 };

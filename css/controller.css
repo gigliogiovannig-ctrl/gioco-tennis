@@ -21,6 +21,12 @@ button.big small { font-size: 13px; font-weight: normal; }
 button.big.go { background: #2e9e4f; color: #fff; box-shadow: 0 5px 0 #1d6e35; }
 button.big.alt { background: #34506e; color: #fff; box-shadow: 0 5px 0 #1d3047; font-size: 19px; }
 #matchCtl, #lobbyCtl, #pausedCtl { display: flex; flex-direction: column; gap: 10px; }
+#energyBox { background: var(--card); border-radius: 14px; padding: 14px; display: flex; flex-direction: column; gap: 10px; text-align: center; }
+#energyBox.full { box-shadow: 0 0 18px #b03cff; }
+#energyLabel { font-weight: bold; color: #e2b8ff; }
+#energyMeter { height: 14px; background: #0d1825; border-radius: 7px; overflow: hidden; }
+#energyFill { height: 100%; width: 0; background: linear-gradient(90deg, #7a3cff, #d36bff); transition: width .3s; }
+button.big.jump { background: #7a3cff; color: #fff; box-shadow: 0 5px 0 #4a1f9e; font-size: 20px; }
 #teamName { text-align: center; font-weight: bold; color: var(--pc); }
 button:disabled { opacity: .5; }
 .msg { color: #ffb4a8; text-align: center; min-height: 1.2em; margin: 0; }

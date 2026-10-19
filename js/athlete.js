@@ -236,16 +236,18 @@ export class Athlete {
 
   // speed: velocità di corsa, bodyYaw: rotazione del busto, freeMode: 'idle' | 'hold' | 'toss' | 'clap',
   // racket: orientamento della racchetta nel sistema del giocatore (il busto viene compensato)
-  update(dt, { speed = 0, bodyYaw = 0, freeMode = 'idle', racket = null } = {}) {
-    const run = Math.min(1, speed / 3);
+  // air: 0..1 quanto è in volo (salto: ginocchia raccolte), headDown: testa bassa (punto perso),
+  // spin: rotazione extra del busto (giravolta), bow: inchino
+  update(dt, { speed = 0, bodyYaw = 0, freeMode = 'idle', racket = null, air = 0, headDown = 0, bow = 0 } = {}) {
+    const run = Math.min(1, speed / 3) * (1 - air);
     this.walk += speed * dt * 2.3;
     const ph = this.walk;
     // Gambe: corsa + posizione di attesa con le ginocchia piegate
     let lowest = 0;
     this.legs.forEach((l, i) => {
       const s = i === 0 ? 1 : -1, sw = Math.sin(ph) * s;
-      l.hip.rotation.x = -this.crouch * 0.6 + sw * 0.75 * run;
-      l.knee.rotation.x = this.crouch + Math.max(0, -Math.sin(ph + 0.6) * s) * 1.3 * run;
+      l.hip.rotation.x = -this.crouch * 0.6 + sw * 0.75 * run - air * 0.9;
+      l.knee.rotation.x = this.crouch + Math.max(0, -Math.sin(ph + 0.6) * s) * 1.3 * run + air * 1.4;
       l.ankle.rotation.x = -(l.hip.rotation.x + l.knee.rotation.x) * 0.6;
       const a1 = l.hip.rotation.x, a2 = a1 + l.knee.rotation.x;
       lowest = Math.max(lowest, THIGH * Math.cos(a1) + SHIN * Math.cos(a2));
@@ -253,7 +255,8 @@ export class Athlete {
     // altezza del bacino tale che il piede più basso tocchi terra (anca -0.03, suola -0.095 sotto la caviglia)
     this.hips.position.y = 0.125 + lowest + Math.abs(Math.sin(ph)) * 0.04 * run;
     this.torso.rotation.y = bodyYaw;
-    this.torso.rotation.x = -0.1 - run * 0.18;
+    this.torso.rotation.x = -0.1 - run * 0.18 - bow * 0.9;
+    this.head.rotation.x = -headDown * 0.55;
     if (racket) this.pivot.quaternion.copy(this.torso.quaternion).invert().multiply(racket);
 
     // Braccio con la racchetta: la mano segue l'impugnatura
@@ -267,6 +270,9 @@ export class Athlete {
     if (freeMode === 'toss') ft.set(0.12 * h, 1.05, -0.32);
     else if (freeMode === 'hold') ft.set(0.16 * h, 0.32, -0.36);
     else if (freeMode === 'clap') ft.set(0.02 * h, 0.4, -0.3);
+    else if (freeMode === 'up') ft.set(0.2 * h, 1.05, -0.05);
+    else if (freeMode === 'fist') ft.set(0.22 * h, 0.75 + Math.max(0, Math.sin(performance.now() / 90)) * 0.25, -0.15);
+    else if (freeMode === 'bow') ft.set(0.1 * h, 0.2, -0.05);
     else ft.set(0.27 * h, 0.12 + run * 0.08, -0.12 + Math.sin(ph) * 0.25 * run);
     solveIK(this.shoulder(h, _s3), ft, UPPER_ARM, FOREARM, _pole.set(0.5 * h, -1, 0.6), this.freeArm.upper, this.freeArm.lower);
   }

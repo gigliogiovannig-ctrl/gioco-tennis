@@ -1,6 +1,6 @@
 # Librerie incluse (tutte con licenza MIT)
 
-- three.module.min.js — three.js r160 — https://threejs.org
+- three.module.min.js e BufferGeometryUtils.js — three.js r160 — https://threejs.org
 - peerjs.min.js — PeerJS 1.5.4 — https://peerjs.com
 - qrcode.js — qrcode-generator 1.4.4 di Kazuhiko Arase — https://github.com/kazuhikoarase/qrcode-generator
 

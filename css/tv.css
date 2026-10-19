@@ -23,6 +23,16 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #8fd3ff; fon
 #hint:empty { display: none; }
 #speed { position: fixed; top: 2.5vh; left: 50%; transform: translateX(-50%); background: rgba(10, 25, 45, 0.82); color: #ffe066; font-weight: bold; padding: .45em 1em; border-radius: 10px; font-size: 2.4vh; opacity: 0; transition: opacity .3s; pointer-events: none; }
 #speed.show { opacity: 1; }
+#energy { position: fixed; top: calc(2.5vh + 10vh); left: 2vw; display: flex; flex-direction: column; gap: .5vh; font-size: 2vh; color: #fff; }
+#energy .erow { display: flex; align-items: center; gap: .5em; background: rgba(10, 25, 45, .7); padding: .25em .6em; border-radius: 8px; }
+#energy .edot { width: .8em; height: .8em; border-radius: 50%; }
+#energy .ebar { width: 7em; height: .55em; background: rgba(255,255,255,.18); border-radius: 4px; overflow: hidden; }
+#energy .ebar span { display: block; height: 100%; background: linear-gradient(90deg, #7a3cff, #d36bff); transition: width .3s; }
+#energy .erow.full { box-shadow: 0 0 12px #b03cff; animation: pulse .6s infinite alternate; }
+@keyframes pulse { to { box-shadow: 0 0 22px #e08bff; } }
+#animal { position: fixed; right: 3vw; top: 30%; font-size: 6vh; font-weight: 900; color: #fff; -webkit-text-stroke: .3vh #12202f; paint-order: stroke fill; opacity: 0; transform: scale(.6) rotate(-8deg); transition: opacity .2s, transform .3s; pointer-events: none; }
+#animal.show { opacity: 1; transform: scale(1) rotate(-8deg); }
+#message.special #msgBig { color: #e9b8ff; -webkit-text-stroke-color: #4a0f7a; text-shadow: 0 0 3vh #b03cff; }
 
 /* Messaggi */
 #message { position: fixed; top: 32%; left: 0; right: 0; text-align: center; pointer-events: none; opacity: 0; transition: opacity .25s, transform .25s; transform: scale(.9); }

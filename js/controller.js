@@ -108,6 +108,7 @@ function onMotion(e) {
   const tipUp = -wz * up[0] + wx * up[2], tipAll = Math.hypot(wz, wx);
   recent.push({ t, tipUp, tipAll });
   while (recent.length && t - recent[0].t > 250) recent.shift();
+  detectJump(e, t);
 
   if (!swing) {
     if (w > th && t - lastSwing > 350) swing = { start: t, peakW: w, peakA: a, peakT: t };
@@ -129,6 +130,26 @@ function onMotion(e) {
     swing = null;
     showSwing(power, loft);
   }
+}
+
+// Salto: mentre si è in aria il telefono è in "caduta libera" e l'accelerometro (gravità compresa)
+// segna quasi zero per un attimo.
+let fallStart = 0, lastJump = 0;
+function detectJump(e, t) {
+  const g = e.accelerationIncludingGravity;
+  if (!g || g.x == null) return;
+  const m = Math.hypot(g.x, g.y, g.z);
+  if (m < 4) {
+    if (!fallStart) fallStart = t;
+    else if (t - fallStart > 80 && t - lastJump > 1200) jump();
+  } else fallStart = 0;
+}
+function jump() {
+  lastJump = performance.now();
+  fallStart = 0;
+  send({ t: 'jump' });
+  if (navigator.vibrate) navigator.vibrate([20, 40, 20]);
+  $('swingLabel').textContent = 'Salto! 🦘';
 }
 
 let swingFlashTimer = 0;
@@ -244,6 +265,15 @@ function onData(d) {
         for (const b of $(id).querySelectorAll('button')) b.classList.toggle('on', +b.dataset.v === +d.opts[key]);
       }
       break;
+    case 'energy':
+      $('energyFill').style.width = Math.round(d.v * 100) + '%';
+      $('energyBox').classList.toggle('full', d.v >= 1);
+      $('energyLabel').textContent = d.v >= 1 ? '⚡ Speciale pronto: SALTA e colpisci!' : 'Energia colpo speciale';
+      break;
+    case 'armed':
+      $('energyLabel').textContent = '⚡ COLPISCI ADESSO!';
+      if (navigator.vibrate) navigator.vibrate([60, 40, 60]);
+      break;
     case 'paused':
       showPaused(d.v);
       break;
@@ -273,6 +303,7 @@ $('hostDiff').addEventListener('click', e => { if (e.target.dataset.v) send({ t:
 $('hostMode').addEventListener('click', e => { if (e.target.dataset.v) send({ t: 'opt', k: 'doubles', v: +e.target.dataset.v }); });
 $('startBtn').addEventListener('click', () => send({ t: 'start' }));
 $('teamBtn').addEventListener('click', () => send({ t: 'team' }));
+$('jumpBtn').addEventListener('click', () => jump());
 $('pauseBtn').addEventListener('click', () => send({ t: 'pause' }));
 $('resumeBtn').addEventListener('click', () => send({ t: 'resume' }));
 $('restartBtn').addEventListener('click', () => send({ t: 'restart' }));
