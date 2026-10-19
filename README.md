@@ -7,6 +7,7 @@ La racchetta sullo schermo segue i movimenti del telefono e gli swing si rilevan
 - **Telefoni**: inquadra il QR code mostrato sulla TV. Si apre la pagina “Racchetta” (`controller.html`).
 - **Singolo**: 1 telefono = tu contro la CPU, 2 telefoni = sfida a due.
 - **Doppio 2 contro 2**: fino a 4 telefoni (squadra rossa contro squadra blu). I posti liberi li occupa la CPU, quindi si può fare anche 2 amici contro 2 CPU. Dal telefono si può cambiare squadra.
+- **Schermo diviso**: quando ci sono giocatori veri in entrambe le squadre (telefoni o tastiera), lo schermo si divide in due verticalmente: a sinistra la squadra rossa e a destra la blu, ognuna vista da dietro la propria metà campo. Contro la CPU (o due amici nella stessa squadra) lo schermo resta intero.
 - **Pausa** in qualsiasi momento: tasto ⏸ sul telefono, oppure P / Esc sulla tastiera. Se un telefono si scollega la partita va in pausa da sola.
 - Non serve installare niente: è tutto nel browser. I telefoni comunicano con la TV via WebRTC (PeerJS).
 

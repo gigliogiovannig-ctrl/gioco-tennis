@@ -162,6 +162,7 @@ function buildCourt() {
     addShadowed(m);
   };
   board(2 * HALF_W_D + 7.2, 0, -(HALF_L + 6.4), 0);
+  board(2 * HALF_W_D + 7.2, 0, HALF_L + 6.4, Math.PI);   // dietro la squadra rossa (si vede a schermo diviso)
   board(2 * HALF_L + 12.8, -(HALF_W_D + 3.6), 0, Math.PI / 2);
   board(2 * HALF_L + 12.8, HALF_W_D + 3.6, 0, -Math.PI / 2);
 
@@ -254,6 +255,11 @@ function buildStadium() {
   const back = new THREE.Group();
   back.position.set(0, 0, -(HALF_L + 7.2));
   buildStand(back, 2 * HALF_W_D + 20, 14, seats);
+  // Tribuna alle spalle della squadra rossa: la vede la squadra blu quando lo schermo è diviso
+  const front = new THREE.Group();
+  front.position.set(0, 0, HALF_L + 7.2);
+  front.rotation.y = Math.PI;
+  buildStand(front, 2 * HALF_W_D + 20, 12, seats);
   for (const s of [-1, 1]) {
     const side = new THREE.Group();
     side.position.set(s * (HALF_W_D + 4.6), 0, 0);

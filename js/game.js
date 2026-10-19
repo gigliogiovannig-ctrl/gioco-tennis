@@ -960,14 +960,59 @@ function update(dt, steps) {
   ballShadow.position.set(ball.pos.x, 0.02, ball.pos.z);
   ballShadow.scale.setScalar(1 + Math.min(ball.pos.y, 5) * 0.15);
 
-  // Telecamera alle spalle della squadra rossa, come in TV
-  const near = game.teams[0];
+  // Telecamera alle spalle della squadra rossa, come in TV; a schermo diviso anche una per la squadra blu
+  const split = isSplit();
+  followCamera(camera, 0, split);
+  if (split) followCamera(camera2, 1, true);
+}
+
+// Schermo diviso quando ci sono giocatori veri in entrambe le squadre:
+// a sinistra la squadra rossa, a destra la blu, ognuna vista dalla propria metà campo
+const camera2 = new THREE.PerspectiveCamera(58, 1, 0.5, 400);
+camera2.position.set(0, 7.5, -(HALF_L + 11));
+const isReal = p => human(p) || isKeyboard(p);
+const isSplit = () => game.mode === 'match' && game.teams[0].some(isReal) && game.teams[1].some(isReal);
+
+function followCamera(cam, team, split) {
+  const s = team === 0 ? 1 : -1;                 // la squadra rossa sta dal lato z > 0
+  const near = game.teams[team];
   const nx = near.reduce((a, p) => a + p.pos.x, 0) / (near.length || 1);
-  const nz = Math.max(...near.map(p => p.pos.z), HALF_L);
-  camera.position.x = lerp(camera.position.x, nx * 0.4 + ball.pos.x * 0.1, 0.05);
-  camera.position.z = lerp(camera.position.z, Math.max(HALF_L + 9, nz + 7.5), 0.05);
-  camera.position.y = game.opts.doubles ? 5.9 : 5.4;
-  camera.lookAt(camera.position.x * 0.5, 0.2, camera.position.z - 23);
+  const nz = Math.max(...near.map(p => p.pos.z * s), HALF_L);
+  // con metà schermo l'inquadratura è più stretta: la telecamera sale e arretra un po'
+  const back = split ? 11 : 9, up = split ? 7.2 : game.opts.doubles ? 5.9 : 5.4;
+  cam.fov = split ? 58 : 46;
+  cam.position.x = lerp(cam.position.x, nx * 0.4 + ball.pos.x * 0.1, 0.05);
+  cam.position.z = lerp(cam.position.z, s * Math.max(HALF_L + back, nz + back - 1.5), 0.05);
+  cam.position.y = up;
+  cam.lookAt(cam.position.x * 0.5, 0.2, cam.position.z - s * 23);
+}
+
+let wasSplit = false;
+function render() {
+  const w = innerWidth, h = innerHeight, split = isSplit();
+  if (split !== wasSplit) { document.body.classList.toggle('split', split); wasSplit = split; }
+  if (!split) {
+    renderer.shadowMap.autoUpdate = true;
+    renderer.setScissorTest(false);
+    renderer.setViewport(0, 0, w, h);
+    camera.aspect = w / h;
+    camera.updateProjectionMatrix();
+    renderer.render(scene, camera);
+    return;
+  }
+  // le ombre si calcolano una volta sola per entrambe le metà
+  renderer.shadowMap.autoUpdate = false;
+  renderer.shadowMap.needsUpdate = true;
+  renderer.setScissorTest(true);
+  const half = Math.floor(w / 2);
+  for (const [cam, x, cw] of [[camera, 0, half], [camera2, half, w - half]]) {
+    cam.aspect = cw / h;
+    cam.updateProjectionMatrix();
+    renderer.setViewport(x, 0, cw, h);
+    renderer.setScissor(x, 0, cw, h);
+    renderer.render(scene, cam);
+  }
+  renderer.setScissorTest(false);
 }
 
 // Qualità automatica: se la TV fatica (meno di ~35 fotogrammi al secondo) si spengono prima le ombre,
@@ -993,7 +1038,7 @@ function frame() {
   const steps = Math.floor(physAcc / STEP);
   physAcc -= steps * STEP;
   update(dt, steps);
-  renderer.render(scene, camera);
+  render();
   requestAnimationFrame(frame);
 }
 
